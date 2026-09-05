@@ -11,6 +11,23 @@ DATA = ROOT / "Data"
 OUT = ROOT / "results" / "GSE28688"
 OUT.mkdir(parents=True, exist_ok=True)
 
+SAMPLE_GROUPS = {
+    "HFF1-a": "HFF1",
+    "HFF1-b": "HFF1",
+    "HFF1-24 h post-transduction-a": "24h",
+    "HFF1-24 h post-transduction-b": "24h",
+    "HFF1-48 h post-transduction-a": "48h",
+    "HFF1-48 h post-transduction-b": "48h",
+    "HFF1-72 h post-transduction-a": "72h",
+    "HFF1-72 h post-transduction-b": "72h",
+    "H1": "H1_hESC",
+    "H9": "H9_hESC",
+    "iPS2 from HFF1-a": "iPS2",
+    "iPS2 from HFF1-b": "iPS2",
+    "iPS4 from HFF1-a": "iPS4",
+    "iPS4 from HFF1-b": "iPS4",
+}
+
 
 def read_table(path):
     opener = gzip.open if path.suffix == ".gz" else open
@@ -44,7 +61,6 @@ def extract_raw_archive(path, extract):
 
 
 def inspect_bgx(path, out_dir):
-    """Read the Illumina BGX annotation file without treating it as expression data."""
     rows = []
     header = None
     with gzip.open(path, "rt", encoding="utf-8", errors="replace") as f:
@@ -65,21 +81,17 @@ def inspect_bgx(path, out_dir):
                 rows.append(parts)
             if len(rows) >= 100000:
                 break
-
     if header is None or not rows:
         return {"path": path.name, "parsed": False, "rows": 0, "columns": []}
-
     df = pd.DataFrame(rows, columns=header)
     df.to_csv(out_dir / "BGX_annotation_sample.csv", index=False)
     return {"path": path.name, "parsed": True, "rows": len(df), "columns": list(df.columns)}
 
 
 def raw_archive_info(archive_path, extract):
-    """Describe the RAW archive and parse BGX annotation when present."""
     files = extract_raw_archive(archive_path, extract)
     info_dir = OUT / "RAW_archive"
     info_dir.mkdir(exist_ok=True)
-
     print("\n=== GSE28688 RAW archive contents ===")
     print(f"Archive members: {len(files)}")
     bgx_result = None
@@ -93,7 +105,6 @@ def raw_archive_info(archive_path, extract):
                 print(f"     annotation rows read: {bgx_result['rows']:,}")
                 print(f"     columns: {', '.join(map(str, bgx_result['columns']))}")
     print("=== end RAW archive contents ===")
-
     report = [
         "Dataset: GSE28688",
         "RAW archive is inspected as supplementary platform/annotation content.",
@@ -129,33 +140,32 @@ def explore(expr, label):
     norm = qnorm(log)
     norm.to_csv(out / "expression_normalized.csv")
 
+    metadata = pd.DataFrame({"sample": expr.columns})
+    metadata["group"] = metadata["sample"].map(SAMPLE_GROUPS).fillna("unclassified")
+    metadata.to_csv(out / "01_sample_metadata.csv", index=False)
+
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.boxplot([log[c].dropna() for c in log], tick_labels=log.columns, showfliers=False)
-    ax.set_title(f"GSE28688 - {label} - distributions")
+    ax.set_title(f"GSE28688 - {label} - log2 distributions")
     ax.tick_params(axis="x", rotation=45)
-    fig.tight_layout()
-    fig.savefig(out / "01_boxplot.png", dpi=250)
-    plt.close(fig)
+    fig.tight_layout(); fig.savefig(out / "02_boxplot.png", dpi=250); plt.close(fig)
 
     qc = pd.DataFrame({"mean": expr.mean(), "median": expr.median(), "sd": expr.std(), "missing": expr.isna().sum()})
-    qc.to_csv(out / "02_sample_QC.csv")
+    qc["group"] = qc.index.map(SAMPLE_GROUPS).fillna("unclassified")
+    qc.to_csv(out / "03_sample_QC.csv")
 
     corr = norm.corr()
-    corr.to_csv(out / "03_sample_correlation.csv")
+    corr.to_csv(out / "04_sample_correlation.csv")
     fig, ax = plt.subplots(figsize=(8, 7))
     im = ax.imshow(corr, vmin=-1, vmax=1)
-    ax.set_xticks(range(len(corr)))
-    ax.set_xticklabels(corr.columns, rotation=45, ha="right")
-    ax.set_yticks(range(len(corr)))
-    ax.set_yticklabels(corr.index)
-    ax.set_title(f"GSE28688 - {label} - correlation")
+    ax.set_xticks(range(len(corr))); ax.set_xticklabels(corr.columns, rotation=45, ha="right")
+    ax.set_yticks(range(len(corr))); ax.set_yticklabels(corr.index)
+    ax.set_title(f"GSE28688 - {label} - sample correlation")
     fig.colorbar(im, ax=ax, label="Pearson r")
-    fig.tight_layout()
-    fig.savefig(out / "04_sample_correlation.png", dpi=250)
-    plt.close(fig)
+    fig.tight_layout(); fig.savefig(out / "05_sample_correlation.png", dpi=250); plt.close(fig)
 
     var = norm.var(axis=1).sort_values(ascending=False)
-    var.to_csv(out / "05_feature_variance.csv", header=["variance"])
+    var.to_csv(out / "06_feature_variance.csv", header=["variance"])
     top = var.head(min(2000, len(var))).index
     X = norm.loc[top].T.fillna(norm.loc[top].T.mean())
     C = X.to_numpy() - X.to_numpy().mean(axis=0)
@@ -163,46 +173,48 @@ def explore(expr, label):
     PC = U * S
     EV = S**2 / np.sum(S**2)
     n_pc = min(5, PC.shape[1])
-    pd.DataFrame(PC[:, :n_pc], index=X.index, columns=[f"PC{i + 1}" for i in range(n_pc)]).to_csv(out / "06_PCA_coordinates.csv")
+    coords = pd.DataFrame(PC[:, :n_pc], index=X.index, columns=[f"PC{i + 1}" for i in range(n_pc)])
+    coords["group"] = coords.index.map(SAMPLE_GROUPS).fillna("unclassified")
+    coords.to_csv(out / "07_PCA_coordinates.csv")
 
     if len(EV) >= 2:
-        fig, ax = plt.subplots(figsize=(8, 7))
-        ax.scatter(PC[:, 0], PC[:, 1], s=90)
-        for i, sample in enumerate(X.index):
-            ax.annotate(sample, (PC[i, 0], PC[i, 1]), xytext=(6, 6), textcoords="offset points", fontsize=8)
-        ax.set_xlabel(f"PC1 ({EV[0] * 100:.1f}%)")
-        ax.set_ylabel(f"PC2 ({EV[1] * 100:.1f}%)")
-        ax.set_title(f"GSE28688 - {label} - PCA")
-        fig.tight_layout()
-        fig.savefig(out / "07_PCA.png", dpi=250)
-        plt.close(fig)
+        fig, ax = plt.subplots(figsize=(9, 7))
+        for group, idx in coords.groupby("group").groups.items():
+            positions = [X.index.get_loc(s) for s in idx]
+            ax.scatter(PC[positions, 0], PC[positions, 1], s=90, label=group)
+            for p in positions:
+                ax.annotate(X.index[p], (PC[p, 0], PC[p, 1]), xytext=(6, 6), textcoords="offset points", fontsize=8)
+        ax.set_xlabel(f"PC1 ({EV[0]*100:.1f}%)"); ax.set_ylabel(f"PC2 ({EV[1]*100:.1f}%)")
+        ax.set_title(f"GSE28688 - {label} - PCA by biological group")
+        ax.legend(fontsize=8)
+        fig.tight_layout(); fig.savefig(out / "08_PCA_by_group.png", dpi=250); plt.close(fig)
 
     features = var.head(min(50, len(var))).index
     z = norm.loc[features]
     z = z.sub(z.mean(axis=1), axis=0).div(z.std(axis=1).replace(0, np.nan), axis=0).fillna(0)
     fig, ax = plt.subplots(figsize=(10, max(6, len(features) * 0.18)))
     im = ax.imshow(z, aspect="auto")
-    ax.set_xticks(range(len(z.columns)))
-    ax.set_xticklabels(z.columns, rotation=45, ha="right")
-    ax.set_yticks(range(len(z.index)))
-    ax.set_yticklabels(z.index, fontsize=6)
-    ax.set_title(f"GSE28688 - {label} - variable features")
+    ax.set_xticks(range(len(z.columns))); ax.set_xticklabels(z.columns, rotation=45, ha="right")
+    ax.set_yticks(range(len(z.index))); ax.set_yticklabels(z.index, fontsize=6)
+    ax.set_title(f"GSE28688 - {label} - top variable features")
     fig.colorbar(im, ax=ax, label="row z-score")
-    fig.tight_layout()
-    fig.savefig(out / "08_top_variable_features.png", dpi=250)
-    plt.close(fig)
+    fig.tight_layout(); fig.savefig(out / "09_top_variable_features.png", dpi=250); plt.close(fig)
 
+    group_counts = metadata["group"].value_counts().sort_index()
     report = [
         f"Dataset: GSE28688 ({label})",
+        "Experiment type: expression profiling by array",
+        "Platform: Illumina HumanRef-8 v3.0 (GPL6883)",
         f"Features: {expr.shape[0]:,}",
         f"Samples: {expr.shape[1]:,}",
+        "Input: GSE28688_non-normalized.txt.gz",
+        "Transformation: log2(x + 1)",
+        "Quantile normalization: exploratory normalization applied after log2 transformation.",
+        "Sample groups:",
     ]
+    report += [f"  {group}: {count}" for group, count in group_counts.items()]
     if len(EV) >= 2:
-        report += [
-            f"PC1: {EV[0] * 100:.2f}%",
-            f"PC2: {EV[1] * 100:.2f}%",
-            f"PC1+PC2: {(EV[0] + EV[1]) * 100:.2f}%",
-        ]
+        report += [f"PC1: {EV[0]*100:.2f}%", f"PC2: {EV[1]*100:.2f}%", f"PC1+PC2: {(EV[0]+EV[1])*100:.2f}%"]
     (out / "REPORT.txt").write_text("\n".join(report), encoding="utf-8")
 
 
