@@ -33,88 +33,80 @@ def expression(df):
     return x.groupby(level=0).mean().replace([np.inf, -np.inf], np.nan).dropna(how="all")
 
 
-def raw_single_sample(path):
-    df = read_table(path).dropna(how="all").dropna(axis=1, how="all")
-    lower = {str(c).strip().lower(): c for c in df.columns}
-    id_names = ["id_ref", "probe_id", "probeid", "probe", "id", "ilmn_id", "array_address_id", "feature_id"]
-    value_names = ["value", "avg_signal", "signal", "signal_a", "mean_signal", "expr", "expression"]
-    id_col = next((lower[n] for n in id_names if n in lower), None)
-    value_col = next((lower[n] for n in value_names if n in lower), None)
-
-    if id_col is None:
-        id_col = df.columns[0]
-    if value_col is None:
-        numeric = df.drop(columns=id_col).apply(pd.to_numeric, errors="coerce")
-        candidates = [c for c in numeric.columns if numeric[c].notna().sum() >= max(10, int(0.5 * len(df)))]
-        if not candidates:
-            raise ValueError(f"Nie znaleziono kolumny wartości w {path.name}")
-        value_col = candidates[0]
-
-    values = pd.to_numeric(df[value_col], errors="coerce")
-    ids = df[id_col].astype(str).str.strip()
-    out = pd.DataFrame({"id": ids, "value": values})
-    out = out[(out["id"] != "") & (out["id"] != "nan") & out["value"].notna()]
-    if len(out) < 10:
-        raise ValueError(f"Za mało wartości ekspresji w {path.name}")
-    out = out.groupby("id")["value"].mean().to_frame()
-    sample_name = path.name
-    for suffix in (".txt.gz", ".csv.gz", ".tsv.gz", ".gz", ".txt", ".csv", ".tsv"):
-        if sample_name.endswith(suffix):
-            sample_name = sample_name[:-len(suffix)]
-            break
-    return out.rename(columns={"value": sample_name})
+def extract_raw_archive(path, extract):
+    extract.mkdir(exist_ok=True)
+    marker = extract / ".archive_extracted"
+    if not marker.exists():
+        with tarfile.open(path, "r") as tar:
+            tar.extractall(extract)
+        marker.write_text("ok", encoding="utf-8")
+    return [f for f in extract.rglob("*") if f.is_file() and f.name != marker.name]
 
 
-def inspect_raw_archive(tar_path):
-    """Print a compact inventory of the RAW archive so the next run identifies its real format."""
-    print("\n=== GSE28688 RAW archive diagnostic ===")
-    with tarfile.open(tar_path, "r") as tar:
-        members = [m for m in tar.getmembers() if m.isfile()]
-        print(f"Archive members: {len(members)}")
-        for i, member in enumerate(members, 1):
-            name = member.name
-            size = member.size
-            magic = ""
-            try:
-                f = tar.extractfile(member)
-                head = f.read(64) if f is not None else b""
-                magic = head[:16].hex(" ")
-                text = head.decode("utf-8", errors="replace").replace("\r", " ").replace("\n", " ")[:100]
-            except Exception as exc:
-                text = f"<read error: {exc}>"
-            print(f"[{i:02d}] {name} | {size:,} bytes | magic={magic}")
-            print(f"     head={text}")
-    print("=== end diagnostic ===\n")
+def inspect_bgx(path, out_dir):
+    """Read the Illumina BGX annotation file without treating it as expression data."""
+    rows = []
+    header = None
+    with gzip.open(path, "rt", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.rstrip("\r\n")
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if header is None:
+                lowered = [p.strip().lower() for p in parts]
+                if any(x in lowered for x in ("probeid", "probe_id", "array_address_id")):
+                    header = parts
+                    continue
+                if len(parts) > 3:
+                    header = parts
+                    continue
+            if header is not None and len(parts) == len(header):
+                rows.append(parts)
+            if len(rows) >= 100000:
+                break
+
+    if header is None or not rows:
+        return {"path": path.name, "parsed": False, "rows": 0, "columns": []}
+
+    df = pd.DataFrame(rows, columns=header)
+    df.to_csv(out_dir / "BGX_annotation_sample.csv", index=False)
+    return {"path": path.name, "parsed": True, "rows": len(df), "columns": list(df.columns)}
 
 
-def raw_archive_expression(extract):
-    files = [f for f in extract.rglob("*") if f.is_file() and (f.suffix in {".txt", ".csv", ".tsv"} or f.name.endswith(".txt.gz") or f.name.endswith(".csv.gz") or f.name.endswith(".tsv.gz"))]
-    if not files:
-        raise ValueError("Archiwum RAW nie zawiera tabel tekstowych.")
+def raw_archive_info(archive_path, extract):
+    """Describe the RAW archive and parse BGX annotation when present."""
+    files = extract_raw_archive(archive_path, extract)
+    info_dir = OUT / "RAW_archive"
+    info_dir.mkdir(exist_ok=True)
 
-    single_samples = []
-    for path in files:
-        try:
-            one = raw_single_sample(path)
-            if one.shape[0] >= 100:
-                single_samples.append(one)
-        except Exception:
-            continue
+    print("\n=== GSE28688 RAW archive contents ===")
+    print(f"Archive members: {len(files)}")
+    bgx_result = None
+    for i, path in enumerate(files, 1):
+        size = path.stat().st_size
+        print(f"[{i:02d}] {path.name} | {size:,} bytes")
+        if path.name.lower().endswith(".bgx.gz"):
+            bgx_result = inspect_bgx(path, info_dir)
+            print(f"     BGX parsed: {bgx_result['parsed']}")
+            if bgx_result["parsed"]:
+                print(f"     annotation rows read: {bgx_result['rows']:,}")
+                print(f"     columns: {', '.join(map(str, bgx_result['columns']))}")
+    print("=== end RAW archive contents ===")
 
-    if len(single_samples) >= 2:
-        expr = pd.concat(single_samples, axis=1, join="outer")
-        expr.columns = [str(c) for c in expr.columns]
-        return expr
-
-    for path in files:
-        try:
-            expr = expression(read_table(path))
-            if expr.shape[0] >= 10 and expr.shape[1] >= 2:
-                return expr
-        except Exception:
-            continue
-
-    raise ValueError("Nie znaleziono użytecznej macierzy ekspresji w GSE28688_RAW.tar")
+    report = [
+        "Dataset: GSE28688",
+        "RAW archive is inspected as supplementary platform/annotation content.",
+        f"Archive members: {len(files)}",
+    ]
+    if bgx_result:
+        report += [
+            f"BGX file: {bgx_result['path']}",
+            f"BGX parsed: {bgx_result['parsed']}",
+            f"BGX rows read: {bgx_result['rows']}",
+            "BGX columns: " + ", ".join(map(str, bgx_result["columns"])),
+        ]
+    (info_dir / "REPORT.txt").write_text("\n".join(report), encoding="utf-8")
 
 
 def qnorm(df):
@@ -217,19 +209,13 @@ def explore(expr, label):
 p = DATA / "GSE28688_non-normalized.txt.gz"
 if p.exists():
     explore(expression(read_table(p)), "non_normalized")
+else:
+    print("Brak GSE28688_non-normalized.txt.gz")
 
 p = DATA / "GSE28688_RAW.tar"
 if p.exists():
-    inspect_raw_archive(p)
-    extract = ROOT / "GSE28688_extracted"
-    extract.mkdir(exist_ok=True)
-    if not any(extract.rglob("*")):
-        with tarfile.open(p, "r") as tar:
-            tar.extractall(extract)
-    try:
-        explore(raw_archive_expression(extract), "RAW_archive")
-    except ValueError as exc:
-        print(f"RAW analysis not completed yet: {exc}")
-        print("Powyzej jest diagnostyka archiwum RAW potrzebna do dopasowania parsera.")
+    raw_archive_info(p, ROOT / "GSE28688_extracted")
+else:
+    print("Brak GSE28688_RAW.tar")
 
 print("GSE28688 exploration complete")
