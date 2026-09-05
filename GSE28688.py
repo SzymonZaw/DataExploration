@@ -58,12 +58,33 @@ def raw_single_sample(path):
         raise ValueError(f"Za mało wartości ekspresji w {path.name}")
     out = out.groupby("id")["value"].mean().to_frame()
     sample_name = path.name
-    if sample_name.endswith(".txt.gz"):
-        sample_name = sample_name[:-7]
-    elif sample_name.endswith(".gz"):
-        sample_name = sample_name[:-3]
-    sample_name = Path(sample_name).stem
+    for suffix in (".txt.gz", ".csv.gz", ".tsv.gz", ".gz", ".txt", ".csv", ".tsv"):
+        if sample_name.endswith(suffix):
+            sample_name = sample_name[:-len(suffix)]
+            break
     return out.rename(columns={"value": sample_name})
+
+
+def inspect_raw_archive(tar_path):
+    """Print a compact inventory of the RAW archive so the next run identifies its real format."""
+    print("\n=== GSE28688 RAW archive diagnostic ===")
+    with tarfile.open(tar_path, "r") as tar:
+        members = [m for m in tar.getmembers() if m.isfile()]
+        print(f"Archive members: {len(members)}")
+        for i, member in enumerate(members, 1):
+            name = member.name
+            size = member.size
+            magic = ""
+            try:
+                f = tar.extractfile(member)
+                head = f.read(64) if f is not None else b""
+                magic = head[:16].hex(" ")
+                text = head.decode("utf-8", errors="replace").replace("\r", " ").replace("\n", " ")[:100]
+            except Exception as exc:
+                text = f"<read error: {exc}>"
+            print(f"[{i:02d}] {name} | {size:,} bytes | magic={magic}")
+            print(f"     head={text}")
+    print("=== end diagnostic ===\n")
 
 
 def raw_archive_expression(extract):
@@ -199,11 +220,16 @@ if p.exists():
 
 p = DATA / "GSE28688_RAW.tar"
 if p.exists():
+    inspect_raw_archive(p)
     extract = ROOT / "GSE28688_extracted"
     extract.mkdir(exist_ok=True)
     if not any(extract.rglob("*")):
         with tarfile.open(p, "r") as tar:
             tar.extractall(extract)
-    explore(raw_archive_expression(extract), "RAW_archive")
+    try:
+        explore(raw_archive_expression(extract), "RAW_archive")
+    except ValueError as exc:
+        print(f"RAW analysis not completed yet: {exc}")
+        print("Powyzej jest diagnostyka archiwum RAW potrzebna do dopasowania parsera.")
 
 print("GSE28688 exploration complete")
