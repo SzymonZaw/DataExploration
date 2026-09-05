@@ -116,12 +116,15 @@ def stage1_data_integration():
         pcs=[c for c in ("PC1","PC2","PC3") if c in coords.columns]
         out=coords[pcs].copy(); out.insert(0,"sample",out.index.astype(str)); source="GSM_or_text"
         if dataset=="GSE28688" and len(out)==14: out["sample"]=GSE28688_ROW_SAMPLE; source="GSE28688_GEO_row_order"
-        out["dataset"]=dataset; out["time_hours"]=[time_hours(dataset,s) for s in out.sample]
+        out["dataset"]=dataset
+        out["time_hours"]=[time_hours(dataset,s) for s in out["sample"]]
         if dataset=="GSE28688" and source=="GSE28688_GEO_row_order": out["time_hours"]=GSE28688_ROW_TIME
-        out["stage"]=[stage_label(s,t) for s,t in zip(out.sample,out.time_hours)]; out["replicate"]=[replicate(s) for s in out.sample]; out["timing_source"]=source
+        out["stage"]=[stage_label(s,t) for s,t in zip(out["sample"],out["time_hours"])]
+        out["replicate"]=[replicate(s) for s in out["sample"]]
+        out["timing_source"]=source
         for pc in pcs: out[f"{pc}_z"]=zscore(orient(out[pc]))
-        timed=out[out.time_hours.notna()]; role="trajectory" if timed.time_hours.nunique()>=2 else "context_only"
-        availability.append({"dataset":dataset,"PCA_file_found":True,"n_samples":len(out),"n_timed_samples":len(timed),"n_unique_times":timed.time_hours.nunique(),"role":role,"timing_source":source,"path":str(path)}); parts.append(out)
+        timed=out[out["time_hours"].notna()]; role="trajectory" if timed["time_hours"].nunique()>=2 else "context_only"
+        availability.append({"dataset":dataset,"PCA_file_found":True,"n_samples":len(out),"n_timed_samples":len(timed),"n_unique_times":timed["time_hours"].nunique(),"role":role,"timing_source":source,"path":str(path)}); parts.append(out)
     av=pd.DataFrame(availability); states=pd.concat(parts,ignore_index=True) if parts else pd.DataFrame()
     av.to_csv(STAGE_DIRS[1]/"01_dataset_availability.csv",index=False); states.to_csv(STAGE_DIRS[1]/"02_master_sample_metadata.csv",index=False)
     return states,av
@@ -141,11 +144,12 @@ def stage3_trajectory_reconstruction(states):
     """Stage 3: reconstruct trajectories after replicate averaging."""
     if states.empty: return pd.DataFrame()
     rows=[]
-    for dataset,g in states[states.time_hours.notna()].groupby("dataset"):
-        if g.time_hours.nunique()<2: continue
+    timed=states[states["time_hours"].notna()]
+    for dataset,g in timed.groupby("dataset"):
+        if g["time_hours"].nunique()<2: continue
         cols=[c for c in ("latent_1","latent_2","latent_3") if c in g]
         m=g.groupby("time_hours",as_index=False)[cols].mean().sort_values("time_hours"); m.insert(0,"dataset",dataset)
-        m["n_replicates"]=g.groupby("time_hours").size().reindex(m.time_hours).to_numpy(); rows.append(m)
+        m["n_replicates"]=g.groupby("time_hours").size().reindex(m["time_hours"]).to_numpy(); rows.append(m)
     traj=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame()
     traj.to_csv(STAGE_DIRS[3]/"01_reconstructed_trajectories.csv",index=False)
     return traj
@@ -156,7 +160,7 @@ def stage4_dynamics(traj):
     if traj.empty: return traj.copy()
     out=traj.copy()
     for dataset,idx in out.groupby("dataset").groups.items():
-        sub=out.loc[idx].sort_values("time_hours"); t=sub.time_hours.to_numpy(float)
+        sub=out.loc[idx].sort_values("time_hours"); t=sub["time_hours"].to_numpy(float)
         for axis in ("latent_1","latent_2","latent_3"):
             x=sub[axis].to_numpy(float); v=derivative(x,t) if len(x)>=2 else np.full(len(x),np.nan); a=derivative(v,t) if len(x)>=3 else np.full(len(x),np.nan)
             out.loc[sub.index,f"d{axis}_dt"]=v; out.loc[sub.index,f"d2{axis}_dt2"]=a
@@ -170,7 +174,7 @@ def stage5_critical_transitions(dynamics):
     if dynamics.empty: return dynamics.copy()
     out=dynamics.copy(); out["rolling_variance_latent1"]=np.nan; out["rolling_autocorrelation_latent1"]=np.nan
     for dataset,idx in out.groupby("dataset").groups.items():
-        sub=out.loc[idx].sort_values("time_hours"); s=sub.latent_1
+        sub=out.loc[idx].sort_values("time_hours"); s=sub["latent_1"]
         if len(s)>=3:
             w=min(5,len(s)); var=s.rolling(w,min_periods=3).var(); ac=s.rolling(w,min_periods=3).apply(lambda q:q.autocorr(1) if q.std()>0 else np.nan)
             out.loc[sub.index,"rolling_variance_latent1"]=var.to_numpy(); out.loc[sub.index,"rolling_autocorrelation_latent1"]=ac.to_numpy()
@@ -182,8 +186,8 @@ def stage6_symbolic_equation_discovery(dynamics):
     if dynamics.empty: return pd.DataFrame()
     rows=[]
     for dataset,g in dynamics.groupby("dataset"):
-        x=g.latent_1.to_numpy(float); target=g.dlatent_1_dt.to_numpy(float)
-        rows.append(pd.DataFrame({"dataset":dataset,"time_hours":g.time_hours.to_numpy(float),"x":x,"target_dx_dt":target,"x2":x*x,"x3":x*x*x,"abs_x":np.abs(x),"sin_x":np.sin(x),"cos_x":np.cos(x),"log1p_abs_x":np.log1p(np.abs(x))}))
+        x=g["latent_1"].to_numpy(float); target=g["dlatent_1_dt"].to_numpy(float)
+        rows.append(pd.DataFrame({"dataset":dataset,"time_hours":g["time_hours"].to_numpy(float),"x":x,"target_dx_dt":target,"x2":x*x,"x3":x*x*x,"abs_x":np.abs(x),"sin_x":np.sin(x),"cos_x":np.cos(x),"log1p_abs_x":np.log1p(np.abs(x))}))
     table=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame(); table.to_csv(STAGE_DIRS[6]/"01_symbolic_regression_design.csv",index=False)
     pd.DataFrame({"candidate_form":["dx/dt = f(x)","dx/dt = f(x,y)","dx/dt = f(x,y,z)"],"method":["symbolic regression","symbolic regression","symbolic regression"],"validation":["complete-dataset holdout"]*3,"status":["planned"]*3}).to_csv(STAGE_DIRS[6]/"02_symbolic_plan.csv",index=False)
     return table
@@ -191,7 +195,7 @@ def stage6_symbolic_equation_discovery(dynamics):
 
 def stage7_heldout_validation(dynamics):
     """Stage 7: leave-one-complete-dataset-out validation plan."""
-    datasets=sorted(dynamics.dataset.unique()) if not dynamics.empty else []; rows=[]
+    datasets=sorted(dynamics["dataset"].unique()) if not dynamics.empty else []; rows=[]
     for test in datasets: rows.append({"held_out_dataset":test,"training_datasets":";".join(d for d in datasets if d!=test),"validation_type":"leave-one-complete-dataset-out","status":"planned"})
     plan=pd.DataFrame(rows); plan.to_csv(STAGE_DIRS[7]/"01_heldout_validation_plan.csv",index=False); return plan
 
@@ -199,7 +203,7 @@ def stage7_heldout_validation(dynamics):
 def stage8_regulatory_integration(dynamics):
     """Stage 8: prepare time-aligned integration with GSE67520 ChIP-seq."""
     if dynamics.empty: return pd.DataFrame()
-    rows=[{"expression_dataset":d,"regulatory_dataset":"GSE67520","integration":"time-aligned regulatory evidence","causal_claim":False,"status":"planned"} for d in sorted(dynamics.dataset.unique())]
+    rows=[{"expression_dataset":d,"regulatory_dataset":"GSE67520","integration":"time-aligned regulatory evidence","causal_claim":False,"status":"planned"} for d in sorted(dynamics["dataset"].unique())]
     plan=pd.DataFrame(rows); plan.to_csv(STAGE_DIRS[8]/"01_regulatory_integration_plan.csv",index=False); return plan
 
 
@@ -210,7 +214,7 @@ def stage9_predictive_ai(dynamics):
     for dataset,g in dynamics.groupby("dataset"):
         g=g.sort_values("time_hours")
         for i in range(len(g)-1):
-            a,b=g.iloc[i],g.iloc[i+1]; rows.append({"dataset":dataset,"time_t":a.time_hours,"time_next":b.time_hours,"dt_hours":b.time_hours-a.time_hours,"latent_1_t":a.latent_1,"latent_2_t":a.latent_2,"latent_3_t":a.latent_3,"latent_1_next":b.latent_1,"latent_2_next":b.latent_2,"latent_3_next":b.latent_3})
+            a,b=g.iloc[i],g.iloc[i+1]; rows.append({"dataset":dataset,"time_t":a["time_hours"],"time_next":b["time_hours"],"dt_hours":b["time_hours"]-a["time_hours"],"latent_1_t":a["latent_1"],"latent_2_t":a["latent_2"],"latent_3_t":a["latent_3"],"latent_1_next":b["latent_1"],"latent_2_next":b["latent_2"],"latent_3_next":b["latent_3"]})
     table=pd.DataFrame(rows); table.to_csv(STAGE_DIRS[9]/"01_next_state_prediction_table.csv",index=False)
     pd.DataFrame({"model_target":["z(t+dt) from z(t), dt"],"validation_unit":["complete_dataset"],"status":["preparation_only"]}).to_csv(STAGE_DIRS[9]/"02_ai_prediction_plan.csv",index=False); return table
 
@@ -220,7 +224,7 @@ def main():
     sym=stage6_symbolic_equation_discovery(dyn); hold=stage7_heldout_validation(dyn); reg=stage8_regulatory_integration(dyn); pred=stage9_predictive_ai(dyn)
     report=["Dynamics v4.0 — stages 1-9","","Stage 1: data integration and metadata harmonisation.","Stage 2: study-normalized latent state representation.","Stage 3: time-aware trajectory reconstruction.","Stage 4: derivative-based dynamics.","Stage 5: critical-transition/stability indicators.","Stage 6: symbolic equation-discovery design; no equation fitted.","Stage 7: complete-dataset held-out validation plan.","Stage 8: regulatory integration plan using GSE67520.","Stage 9: next-state predictive AI design; no model fitted.","","Scientific boundary: Stage 2 is not yet a proven cross-study biological latent space. Stages 6-9 remain preparation layers until the common representation and leakage-safe validation are established."]
     (OUT/"REPORT.txt").write_text("\n".join(report),encoding="utf-8")
-    print(f"Dynamics v4.0 results written to: {OUT}"); print(f"Datasets with PCA: {int(av.PCA_file_found.sum())}/{len(DATASETS)}"); print(f"Trajectory timepoints: {len(traj)}"); print(f"Stage 6 symbolic rows: {len(sym)}"); print(f"Stage 7 held-out datasets: {len(hold)}"); print(f"Stage 8 regulatory rows: {len(reg)}"); print(f"Stage 9 prediction pairs: {len(pred)}")
+    print(f"Dynamics v4.0 results written to: {OUT}"); print(f"Datasets with PCA: {int(av['PCA_file_found'].sum())}/{len(DATASETS)}"); print(f"Trajectory timepoints: {len(traj)}"); print(f"Stage 6 symbolic rows: {len(sym)}"); print(f"Stage 7 held-out datasets: {len(hold)}"); print(f"Stage 8 regulatory rows: {len(reg)}"); print(f"Stage 9 prediction pairs: {len(pred)}")
 
 
 if __name__=="__main__": main()
