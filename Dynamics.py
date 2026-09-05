@@ -1,8 +1,8 @@
-"""Dynamics v2.2: time-aware exploratory dynamics of OSKM reprogramming.
+"""Dynamics v2.3: time-aware exploratory dynamics of OSKM reprogramming.
 
 Uses existing PCA outputs, explicit biological time, replicate-safe derivatives,
-and study-internal standardized state coordinates. It does not assume PCA axes
-are comparable between studies and does not fit a biological law.
+and study-internal standardized state coordinates. Studies are classified as
+trajectory-capable or context-only; no biological law is fitted here.
 """
 
 from pathlib import Path
@@ -36,7 +36,7 @@ GSM_TIME = {
     # GSE52052: all samples are day 11
     "GSM1258008": 264.0, "GSM1258009": 264.0, "GSM1258010": 264.0,
     "GSM1258011": 264.0, "GSM1258012": 264.0, "GSM1258013": 264.0,
-    # GSE67462: two replicates per stage
+    # GSE67462: two replicates per stage; iPSC endpoint has no numeric elapsed time.
     "GSM1647454": 0.0, "GSM1647455": 0.0,
     "GSM1647456": 24.0, "GSM1647457": 24.0,
     "GSM1647458": 72.0, "GSM1647459": 72.0,
@@ -82,9 +82,16 @@ def load_pca(path):
 
 
 def time_hours(dataset, sample):
+    """Recover biological time robustly from GSM IDs or descriptive sample names."""
     s = str(sample).strip().strip('"')
-    if s in GSM_TIME:
-        return GSM_TIME[s]
+
+    # PCA files may contain a GSM ID embedded in a longer index string.
+    gsm_match = re.search(r"GSM\d+", s, re.I)
+    if gsm_match:
+        gsm = gsm_match.group(0).upper()
+        if gsm in GSM_TIME:
+            return GSM_TIME[gsm]
+
     text = s.lower().replace("_", " ").replace("-", " ")
     for pattern, value in TIME_PATTERNS.get(dataset, []):
         if re.search(pattern, text):
@@ -163,6 +170,10 @@ def process(dataset, path):
         out[f"{pc}_z"] = zscore(orient(out[pc]))
 
     timed = out[out["time_hours"].notna()].copy()
+    n_unique = timed["time_hours"].nunique()
+    trajectory_capable = n_unique >= 2
+    out["analysis_role"] = "trajectory" if trajectory_capable else "context_only"
+
     if timed.empty:
         for pc in pcs:
             out[f"d{pc}_dt"] = np.nan
@@ -174,7 +185,7 @@ def process(dataset, path):
     # Replicate-safe: first average the state at identical biological times.
     zcols = [f"{pc}_z" for pc in pcs]
     mean_state = timed.groupby("time_hours", as_index=False)[zcols].mean().sort_values("time_hours")
-    if len(mean_state) >= 2:
+    if trajectory_capable:
         for pc in pcs:
             mean_state[f"d{pc}_dt"] = derivative(
                 mean_state[f"{pc}_z"].to_numpy(),
@@ -189,7 +200,7 @@ def process(dataset, path):
 
     mean_state["rolling_variance_PC1"] = np.nan
     mean_state["rolling_autocorrelation_PC1"] = np.nan
-    if len(mean_state) >= 3:
+    if trajectory_capable and len(mean_state) >= 3:
         s = mean_state["PC1_z"]
         w = min(5, len(s))
         mean_state["rolling_variance_PC1"] = s.rolling(w, min_periods=3).var().to_numpy()
@@ -207,11 +218,13 @@ def summary(states):
     rows = []
     for dataset, g in states.groupby("dataset"):
         t = g[g["time_hours"].notna()]
+        n_unique = t["time_hours"].nunique()
         rows.append({
             "dataset": dataset,
+            "analysis_role": "trajectory" if n_unique >= 2 else "context_only",
             "n_samples": len(g),
             "n_timed_samples": len(t),
-            "n_unique_times": t["time_hours"].nunique(),
+            "n_unique_times": n_unique,
             "time_min_hours": t["time_hours"].min() if len(t) else np.nan,
             "time_max_hours": t["time_hours"].max() if len(t) else np.nan,
             "replicate_labelled": int((g["replicate"] != "unknown").sum()),
@@ -226,13 +239,17 @@ def main():
     for dataset, path in DATASETS.items():
         state, pcs = process(dataset, path)
         found = state is not None
+        timed_n = int(state["time_hours"].notna().sum()) if found else 0
+        unique_n = int(state["time_hours"].dropna().nunique()) if found else 0
+        role = "trajectory" if unique_n >= 2 else "context_only"
         availability.append({
             "dataset": dataset,
             "PCA_file_found": found,
             "path": str(path),
             "PCs_available": ",".join(pcs),
-            "timed_samples": int(state["time_hours"].notna().sum()) if found else 0,
-            "unique_times": int(state["time_hours"].dropna().nunique()) if found else 0,
+            "analysis_role": role,
+            "timed_samples": timed_n,
+            "unique_times": unique_n,
         })
         if found:
             parts.append(state)
@@ -247,9 +264,14 @@ def main():
     summary(states).to_csv(OUT / "03_trajectory_summary.csv", index=False)
 
     cols = ["dataset", "sample", "stage", "replicate", "time_hours",
-            "PC1_z", "dPC1_dt", "PC2_z", "dPC2_dt", "PC3_z", "dPC3_dt", "state_speed"]
+            "analysis_role", "PC1_z", "dPC1_dt", "PC2_z", "dPC2_dt",
+            "PC3_z", "dPC3_dt", "state_speed"]
     training = states[[c for c in cols if c in states.columns]]
-    training = training[training["time_hours"].notna()].sort_values(["dataset", "time_hours", "sample"])
+    # Only true trajectories enter derivative/symbolic training. Context-only studies
+    # remain available in the full state table for later cross-sectional analyses.
+    training = training[
+        training["time_hours"].notna() & (training["analysis_role"] == "trajectory")
+    ].sort_values(["dataset", "time_hours", "sample"])
     training.to_csv(OUT / "04_symbolic_training_table.csv", index=False)
 
     # Candidate library uses one row per unique time point, not one row per replicate.
@@ -268,12 +290,15 @@ def main():
         lib.to_csv(OUT / "05_symbolic_candidate_library.csv", index=False)
 
     report = [
-        "Dynamics v2.2 — time-aware exploratory dynamics of OSKM reprogramming",
+        "Dynamics v2.3 — time-aware exploratory dynamics of OSKM reprogramming",
         "",
-        "Biological time is recovered from GEO sample IDs and descriptive names.",
+        "Biological time is recovered from embedded GEO GSM IDs and descriptive sample names.",
         "Replicates at identical time points are averaged before derivatives are estimated.",
         "PCA coordinates are standardized within each study; PCA axes are not assumed comparable between studies.",
-        "The symbolic-regression table is a preparation layer, not a fitted biological equation.",
+        "Studies with fewer than two unique timed points are classified as context_only and are excluded from derivative/symbolic training.",
+        "",
+        "Trajectory-capable studies are the only inputs to the current dynamical training table.",
+        "Context-only studies remain in the full state table and can later test cross-sectional effects at a fixed time.",
         "",
         "Research target: test whether independent reprogramming experiments share a robust",
         "low-dimensional temporal dynamical structure and whether a model learned on one",
@@ -286,13 +311,17 @@ def main():
     ]
     (OUT / "REPORT.txt").write_text("\n".join(report), encoding="utf-8")
 
-    print(f"Dynamics v2.2 results written to: {OUT}")
+    print(f"Dynamics v2.3 results written to: {OUT}")
     print(f"Datasets with PCA: {len(parts)}/{len(DATASETS)}")
     print(f"Time-aware observations: {len(training)}")
     print("Replicate-safe derivative calculation: enabled")
     print("Dataset timing summary:")
     for row in availability:
-        print(f"  {row['dataset']}: PCA={row['PCA_file_found']}, timed={row['timed_samples']}, unique_times={row['unique_times']}")
+        print(
+            f"  {row['dataset']}: PCA={row['PCA_file_found']}, "
+            f"role={row['analysis_role']}, timed={row['timed_samples']}, "
+            f"unique_times={row['unique_times']}"
+        )
 
 
 if __name__ == "__main__":
