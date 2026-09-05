@@ -193,17 +193,24 @@ def http_json(url,data=None,context=None):
     with urllib.request.urlopen(req,**kw) as r:return json.loads(r.read().decode("utf-8",errors="replace"))
 
 def mygene_query(ids,scopes,species,fields):
+    """Batch-query MyGene using its documented POST form, not JSON/ids payloads."""
     rows=[]; url="https://mygene.info/v3/query"
     for start in range(0,len(ids),500):
-        batch=ids[start:start+500]; payload={"q":"".join([]),"scopes":scopes,"fields":fields,"species":species,"size":500,"from":0,"ids":batch}; payload.pop("q",None); errors=[]; result=None
+        batch=ids[start:start+500]; errors=[]; result=None
+        form={"q":",".join(batch),"scopes":scopes,"fields":fields,"species":species,"size":500}
+        encoded=urllib.parse.urlencode(form).encode("utf-8")
         for context in (None,ssl._create_unverified_context()):
-            try:result=http_json(url,payload,context);break
+            try:
+                req=urllib.request.Request(url,data=encoded,headers={"User-Agent":"DataExploration-Dynamics/5.8","Accept":"application/json","Content-Type":"application/x-www-form-urlencoded"},method="POST")
+                kw={"timeout":180}
+                if context is not None:kw["context"]=context
+                with urllib.request.urlopen(req,**kw) as r:result=json.loads(r.read().decode("utf-8",errors="replace"))
+                break
             except Exception as exc:errors.append(str(exc))
         if result is None:
             print(f"  MyGene batch {start//500+1} failed: {'; '.join(errors)}"); continue
-        if isinstance(result,list):rows.extend(result)
-        elif isinstance(result,dict):rows.extend(result.get("out",result.get("hits",[])))
-        print(f"  MyGene batch {start//500+1} succeeded: {len(rows)} cumulative records")
+        hits=result if isinstance(result,list) else result.get("out",result.get("hits",[])) if isinstance(result,dict) else []
+        rows.extend(hits); print(f"  MyGene batch {start//500+1} succeeded: {len(rows)} cumulative records")
     return rows
 
 def mygene_human_ensembl(ids):
@@ -278,14 +285,12 @@ def biomart_ensembl_to_human(ids):
     clean=sorted({extract_ensembl(x) for x in ids if extract_ensembl(x)}); print(f"  Ensembl IDs to map: {len(clean)}")
     cache=CACHE/"human_ensembl_to_symbol.tsv"; cols=["ensembl_gene_id","human_gene"]
     existing=pd.read_csv(cache,sep="\t",dtype=str).fillna("") if cache.exists() else pd.DataFrame(columns=cols); done=set(existing.ensembl_gene_id.map(extract_ensembl)) if not existing.empty else set(); todo=[x for x in clean if x not in done]; rows=[]
-    # Ensembl BioMart is optional. Try only one batch as a quick availability probe; if it fails twice, use MyGene for the complete mapping.
     if todo:
         batch=todo[:200]; xml=f'''<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE Query><Query virtualSchemaName="default" formatter="TSV" header="0" uniqueRows="1" count="" datasetConfigVersion="0.6"><Dataset name="hsapiens_gene_ensembl" interface="default"><Filter name="ensembl_gene_id" value="{','.join(batch)}"/><Attribute name="ensembl_gene_id"/><Attribute name="external_gene_name"/></Dataset></Query>'''; txt=biomart_query(xml,"human Ensembl",1)
         if txt:
             for line in txt.splitlines():
                 p=line.rstrip("\r").split("\t")
                 if len(p)>=2 and p[0]:rows.append({"ensembl_gene_id":extract_ensembl(p[0]),"human_gene":normalize_gene_symbol(p[1]) or ""})
-            # If the probe worked, continue with the remaining batches.
             for start in range(200,len(todo),200):
                 batch=todo[start:start+200]; xml=f'''<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE Query><Query virtualSchemaName="default" formatter="TSV" header="0" uniqueRows="1" count="" datasetConfigVersion="0.6"><Dataset name="hsapiens_gene_ensembl" interface="default"><Filter name="ensembl_gene_id" value="{','.join(batch)}"/><Attribute name="ensembl_gene_id"/><Attribute name="external_gene_name"/></Dataset></Query>'''; txt=biomart_query(xml,"human Ensembl",start//200+1)
                 if not txt:break
