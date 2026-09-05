@@ -11,20 +11,27 @@ OUT = ROOT / "results" / "GSE148158"
 OUT.mkdir(parents=True, exist_ok=True)
 
 SAMPLE_GROUPS = {
-    "BJ_2 [re-analysis]": "BJ_fibroblast",
-    "BJ_1 [re-analysis]": "BJ_fibroblast",
-    "BJ_3 [re-analysis]": "BJ_fibroblast",
-    "BJ_4 [re-analysis]": "BJ_fibroblast",
-    "H1_2 [re-analysis]": "hESC",
-    "H9 [re-analysis]": "hESC",
-    "H1 [re-analysis]": "hESC",
-    "BJ_GFP48": "GFP_48h",
-    "BJ_GFP48b": "GFP_48h",
-    "BJ_GFP72": "GFP_72h",
-    "BJ_GFP72b": "GFP_72h",
-    "OSKM48": "OSKM_48h",
-    "OSKM72": "OSKM_72h",
+    "BJ_2 [re-analysis]": "BJ_fibroblast", "BJ_2": "BJ_fibroblast",
+    "BJ_1 [re-analysis]": "BJ_fibroblast", "BJ_1": "BJ_fibroblast",
+    "BJ_3 [re-analysis]": "BJ_fibroblast", "BJ_3": "BJ_fibroblast",
+    "BJ_4 [re-analysis]": "BJ_fibroblast", "BJ_4": "BJ_fibroblast",
+    "H1_2 [re-analysis]": "hESC", "H1_2": "hESC",
+    "H9 [re-analysis]": "hESC", "H9": "hESC",
+    "H1 [re-analysis]": "hESC", "H1": "hESC",
+    "BJ_GFP48": "GFP_48h", "BJ_GFP48b": "GFP_48h",
+    "BJ_GFP72": "GFP_72h", "BJ_GFP72b": "GFP_72h",
+    "OSKM48": "OSKM_48h", "OSKM72": "OSKM_72h",
 }
+
+
+def group_for_sample(sample):
+    s = str(sample).strip()
+    if s in SAMPLE_GROUPS:
+        return SAMPLE_GROUPS[s]
+    for key, group in SAMPLE_GROUPS.items():
+        if s.startswith(key) or key in s:
+            return group
+    return "unclassified"
 
 
 def read_expression(path):
@@ -48,7 +55,7 @@ expr = read_expression(DATA)
 expr.to_csv(OUT / "expression.csv")
 
 metadata = pd.DataFrame({"sample": expr.columns})
-metadata["group"] = metadata["sample"].map(SAMPLE_GROUPS).fillna("unclassified")
+metadata["group"] = metadata["sample"].map(group_for_sample)
 metadata.to_csv(OUT / "01_sample_metadata.csv", index=False)
 
 fig, ax = plt.subplots(figsize=(12, 6))
@@ -60,7 +67,7 @@ save_plot(fig, "02_boxplot.png")
 
 sample_summary = pd.DataFrame({"mean": expr.mean(), "median": expr.median(), "sd": expr.std(),
                                "min": expr.min(), "max": expr.max(), "missing": expr.isna().sum()})
-sample_summary["group"] = sample_summary.index.map(SAMPLE_GROUPS).fillna("unclassified")
+sample_summary["group"] = sample_summary.index.map(group_for_sample)
 sample_summary.to_csv(OUT / "03_sample_QC.csv")
 
 corr = expr.corr(method="pearson")
@@ -84,7 +91,7 @@ PC = U * S
 EV = S**2 / np.sum(S**2)
 coords = pd.DataFrame(PC[:, :min(5, PC.shape[1])], index=X.index,
                       columns=[f"PC{i+1}" for i in range(min(5, PC.shape[1]))])
-coords["group"] = coords.index.map(SAMPLE_GROUPS).fillna("unclassified")
+coords["group"] = coords.index.map(group_for_sample)
 coords.to_csv(OUT / "07_PCA_coordinates.csv")
 if len(EV) >= 2:
     fig, ax = plt.subplots(figsize=(9, 7))
