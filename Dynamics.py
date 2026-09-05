@@ -1,86 +1,68 @@
-"""Dynamics v4.3: staged OSKM reprogramming dynamics pipeline.
+"""Dynamics v4.4: OSKM reprogramming dynamics pipeline.
 
 Stages 1-5: integration, latent representation, trajectories, derivatives,
 and critical-transition indicators.
-Stage 2.1: time-anchored cross-study common latent representation.
-Stage 2.2: validation of common latent geometry and leakage-safe alignment.
-Stages 6-9: symbolic equation discovery, held-out validation, regulatory
-integration, and predictive AI preparation.
+Stage 2.1: time-anchored cross-study trajectory geometry.
+Stage 2.2: alignment/concordance diagnostics.
+Stage 2.3: sample-level residual validation of the common latent space.
+Stages 6-9: symbolic discovery, held-out validation, regulatory integration,
+and predictive-AI preparation.
 
-Scientific boundary: Stage 2.1 is a geometry/time-alignment layer, not a
-claim that heterogeneous platforms measure an identical molecular state.
-Stage 2.2 quantifies alignment/concordance; it does not establish biological
-universality. GSE67520 remains regulatory evidence and GSE52052 is context-only.
+Scientific boundary: heterogeneous datasets are not assumed to measure an
+identical molecular state. Stage 2.3 explicitly tests whether the apparent
+cross-study geometry survives when actual sample-level variation is retained.
 """
-
 from pathlib import Path
 import re
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parent
-RESULTS = ROOT / "results"
-OUT = RESULTS / "Dynamics"
-STAGE_DIRS = {i: OUT / f"stage{i}" for i in range(1, 10)}
-for d in STAGE_DIRS.values(): d.mkdir(parents=True, exist_ok=True)
-STAGE21 = OUT / "stage2_1"; STAGE21.mkdir(parents=True, exist_ok=True)
-STAGE22 = OUT / "stage2_2"; STAGE22.mkdir(parents=True, exist_ok=True)
-
-DATASETS = {
-    "GSE28688": RESULTS / "GSE28688" / "non_normalized" / "07_PCA_coordinates.csv",
-    "GSE148158": RESULTS / "GSE148158" / "07_PCA_coordinates.csv",
-    "GSE52052": RESULTS / "GSE52052" / "08_PCA_coordinates.csv",
-    "GSE67462": RESULTS / "GSE67462" / "09_PCA_coordinates.csv",
-    "GSE297234": RESULTS / "GSE297234" / "08_PCA_coordinates.csv",
-}
-GSM_TIME = {
-    "GSM4455240":48.,"GSM4455241":48.,"GSM4455242":72.,"GSM4455243":72.,"GSM4455244":48.,"GSM4455245":72.,
-    "GSM710515":24.,"GSM710516":24.,"GSM710517":48.,"GSM710518":48.,"GSM710519":72.,"GSM710520":72.,
-    "GSM1258008":264.,"GSM1258009":264.,"GSM1258010":264.,"GSM1258011":264.,"GSM1258012":264.,"GSM1258013":264.,
-    "GSM1647454":0.,"GSM1647455":0.,"GSM1647456":24.,"GSM1647457":24.,"GSM1647458":72.,"GSM1647459":72.,
-    "GSM1647460":120.,"GSM1647461":168.,"GSM1647462":168.,"GSM1647463":168.,"GSM1647464":264.,"GSM1647465":264.,
-    "GSM1647466":360.,"GSM1647467":360.,"GSM1647468":432.,"GSM1647469":432.,
-    "GSM8986586":0.,"GSM8986587":72.,"GSM8986588":168.,"GSM8986589":240.,"GSM8986590":0.,"GSM8986591":72.,"GSM8986592":168.,"GSM8986593":240.,
-}
-# Correct the two remaining GSE67462 replicate times explicitly.
-GSM_TIME.update({"GSM1647460":120.,"GSM1647461":120.})
-GSE28688_ROW_SAMPLE = [f"GSM{x}" for x in range(710513,710527)]
-GSE28688_ROW_TIME = [0.,0.,24.,24.,48.,48.,72.,72.,np.nan,np.nan,np.nan,np.nan,np.nan,np.nan]
-TIME_PATTERNS = {
-    "GSE28688":[(r"24\s*h",24.),(r"48\s*h",48.),(r"72\s*h",72.)],
-    "GSE148158":[(r"48",48.),(r"72",72.)], "GSE52052":[(r"day\s*11",264.)],
-    "GSE67462":[(r"day\s*0\b",0.),(r"day\s*1\b",24.),(r"day\s*3\b",72.),(r"day\s*5\b",120.),(r"day\s*7\b",168.),(r"day\s*11\b",264.),(r"day\s*15\b",360.),(r"day\s*18\b",432.)],
-    "GSE297234":[(r"d0\b|day\s*0\b",0.),(r"d3\b|day\s*3\b",72.),(r"d7\b|day\s*7\b",168.),(r"d10\b|day\s*10\b",240.)],
-}
+ROOT=Path(__file__).resolve().parent
+RESULTS=ROOT/"results"; OUT=RESULTS/"Dynamics"
+STAGE_DIRS={i:OUT/f"stage{i}" for i in range(1,10)}
+for d in STAGE_DIRS.values(): d.mkdir(parents=True,exist_ok=True)
+STAGE21=OUT/"stage2_1"; STAGE21.mkdir(parents=True,exist_ok=True)
+STAGE22=OUT/"stage2_2"; STAGE22.mkdir(parents=True,exist_ok=True)
+STAGE23=OUT/"stage2_3"; STAGE23.mkdir(parents=True,exist_ok=True)
+DATASETS={
+"GSE28688":RESULTS/"GSE28688"/"non_normalized"/"07_PCA_coordinates.csv",
+"GSE148158":RESULTS/"GSE148158"/"07_PCA_coordinates.csv",
+"GSE52052":RESULTS/"GSE52052"/"08_PCA_coordinates.csv",
+"GSE67462":RESULTS/"GSE67462"/"09_PCA_coordinates.csv",
+"GSE297234":RESULTS/"GSE297234"/"08_PCA_coordinates.csv"}
+GSM_TIME={
+"GSM4455240":48.,"GSM4455241":48.,"GSM4455242":72.,"GSM4455243":72.,"GSM4455244":48.,"GSM4455245":72.,
+"GSM710515":24.,"GSM710516":24.,"GSM710517":48.,"GSM710518":48.,"GSM710519":72.,"GSM710520":72.,
+"GSM1258008":264.,"GSM1258009":264.,"GSM1258010":264.,"GSM1258011":264.,"GSM1258012":264.,"GSM1258013":264.,
+"GSM1647454":0.,"GSM1647455":0.,"GSM1647456":24.,"GSM1647457":24.,"GSM1647458":72.,"GSM1647459":72.,
+"GSM1647460":120.,"GSM1647461":120.,"GSM1647462":168.,"GSM1647463":168.,"GSM1647464":264.,"GSM1647465":264.,
+"GSM1647466":360.,"GSM1647467":360.,"GSM1647468":432.,"GSM1647469":432.,
+"GSM8986586":0.,"GSM8986587":72.,"GSM8986588":168.,"GSM8986589":240.,"GSM8986590":0.,"GSM8986591":72.,"GSM8986592":168.,"GSM8986593":240.}
+GSE28688_ROW_SAMPLE=[f"GSM{x}" for x in range(710513,710527)]
+GSE28688_ROW_TIME=[0.,0.,24.,24.,48.,48.,72.,72.,np.nan,np.nan,np.nan,np.nan,np.nan,np.nan]
 
 def load_pca(path):
     if not path.exists(): return None
     df=pd.read_csv(path,index_col=0); pcs=[c for c in ("PC1","PC2","PC3") if c in df.columns]
-    if not pcs: return None
-    out=df[pcs].apply(pd.to_numeric,errors="coerce"); out.index=out.index.astype(str); return out
+    if not pcs:return None
+    x=df[pcs].apply(pd.to_numeric,errors="coerce"); x.index=x.index.astype(str); return x
 
-def time_hours(dataset,sample):
-    s=str(sample).strip().strip('"')
-    if s in GSM_TIME: return GSM_TIME[s]
-    text=s.lower().replace("_"," ").replace("-"," ")
-    for pat,val in TIME_PATTERNS.get(dataset,[]):
-        if re.search(pat,text): return val
+def time_hours(ds,s):
+    s=str(s).strip().strip('"')
+    if s in GSM_TIME:return GSM_TIME[s]
+    t=s.lower().replace("_"," ").replace("-"," ")
+    pats={"GSE28688":[(r"24\s*h",24.),(r"48\s*h",48.),(r"72\s*h",72.)],"GSE148158":[(r"48",48.),(r"72",72.)],"GSE52052":[(r"day\s*11",264.)],"GSE67462":[(r"day\s*0\b",0.),(r"day\s*1\b",24.),(r"day\s*3\b",72.),(r"day\s*5\b",120.),(r"day\s*7\b",168.),(r"day\s*11\b",264.),(r"day\s*15\b",360.),(r"day\s*18\b",432.)],"GSE297234":[(r"d0\b|day\s*0\b",0.),(r"d3\b|day\s*3\b",72.),(r"d7\b|day\s*7\b",168.),(r"d10\b|day\s*10\b",240.)]}
+    for p,v in pats.get(ds,[]):
+        if re.search(p,t):return v
     return np.nan
 
-def stage_label(sample,t):
-    text=str(sample).lower()
-    if re.search(r"ipsc|\bips\b",text): return "iPSC"
-    if re.search(r"hesc",text): return "hESC"
-    if pd.notna(t): return f"day{int(t/24)}" if t%24==0 else f"{int(t)}h"
-    return "unknown"
-
-def replicate(sample):
-    s=str(sample); m=re.search(r"(?:-|_|\s)([ab])$",s,re.I)
-    if m: return m.group(1).lower()
+def replicate(s):
+    s=str(s); m=re.search(r"(?:-|_|\s)([ab])$",s,re.I)
+    if m:return m.group(1).lower()
     m=re.search(r"(?:rep|replicate)[_\s-]*(\d+)",s,re.I)
-    if m: return m.group(1)
+    if m:return m.group(1)
     m=re.fullmatch(r"GSM(\d+)",s)
-    if m and 1647454<=int(m.group(1))<=1647469: return "1" if int(m.group(1))%2==0 else "2"
+    if m and 1647454<=int(m.group(1))<=1647469:return "1" if int(m.group(1))%2==0 else "2"
     return "unknown"
 
 def zscore(x):
@@ -89,203 +71,192 @@ def zscore(x):
 
 def orient(x):
     x=pd.Series(x,dtype=float).copy(); v=x.dropna()
-    if v.empty: return x
-    i=v.abs().idxmax(); return -x if x.loc[i]<0 else x
-
-def derivative(x,t):
-    x=np.asarray(x,float); t=np.asarray(t,float)
-    if len(x)<2: return np.full(len(x),np.nan)
-    if np.any(np.diff(t)<=0): raise ValueError("Duplicate/non-increasing time reached derivative().")
-    if len(x)==2:
-        v=(x[1]-x[0])/(t[1]-t[0]); return np.array([v,v])
-    return np.gradient(x,t)
+    if len(v):
+        i=v.abs().idxmax()
+        if x.loc[i]<0:x=-x
+    return x
 
 def stage1_data_integration():
-    availability=[]; parts=[]
-    for dataset,path in DATASETS.items():
-        coords=load_pca(path)
-        if coords is None:
-            availability.append({"dataset":dataset,"PCA_file_found":False,"n_samples":0,"n_timed_samples":0,"n_unique_times":0,"role":"unavailable","timing_source":"none","path":str(path)}); continue
-        pcs=[c for c in ("PC1","PC2","PC3") if c in coords.columns]; out=coords[pcs].copy(); out.insert(0,"sample",out.index.astype(str)); source="GSM_or_text"
-        if dataset=="GSE28688" and len(out)==14: out["sample"]=GSE28688_ROW_SAMPLE; source="GSE28688_GEO_row_order"
-        out["dataset"]=dataset; out["time_hours"]=[time_hours(dataset,s) for s in out["sample"]]
-        if dataset=="GSE28688" and source=="GSE28688_GEO_row_order": out["time_hours"]=GSE28688_ROW_TIME
-        out["stage"]=[stage_label(s,t) for s,t in zip(out["sample"],out["time_hours"])]
-        out["replicate"]=[replicate(s) for s in out["sample"]]; out["timing_source"]=source
-        for pc in pcs: out[f"{pc}_z"]=zscore(orient(out[pc]))
-        timed=out[out["time_hours"].notna()]; role="trajectory" if timed["time_hours"].nunique()>=2 else "context_only"
-        availability.append({"dataset":dataset,"PCA_file_found":True,"n_samples":len(out),"n_timed_samples":len(timed),"n_unique_times":timed["time_hours"].nunique(),"role":role,"timing_source":source,"path":str(path)}); parts.append(out)
-    av=pd.DataFrame(availability); states=pd.concat(parts,ignore_index=True) if parts else pd.DataFrame()
-    av.to_csv(STAGE_DIRS[1]/"01_dataset_availability.csv",index=False); states.to_csv(STAGE_DIRS[1]/"02_master_sample_metadata.csv",index=False); return states,av
+    rows=[]; states=[]
+    for ds,path in DATASETS.items():
+        x=load_pca(path)
+        if x is None:
+            rows.append({"dataset":ds,"PCA_file_found":False,"n_samples":0,"n_timed_samples":0,"n_unique_times":0,"role":"unavailable","timing_source":"none","path":str(path)});continue
+        o=x.copy();o.insert(0,"sample",o.index.astype(str)); source="GSM_or_text"
+        if ds=="GSE28688" and len(o)==14:o["sample"]=GSE28688_ROW_SAMPLE;source="GSE28688_GEO_row_order"
+        o["dataset"]=ds;o["time_hours"]=[time_hours(ds,s) for s in o["sample"]]
+        if ds=="GSE28688" and source=="GSE28688_GEO_row_order":o["time_hours"]=GSE28688_ROW_TIME
+        o["stage"]=o["time_hours"].map(lambda t:f"day{int(t/24)}" if pd.notna(t) and t%24==0 else (f"{int(t)}h" if pd.notna(t) else "unknown"))
+        o["replicate"]=[replicate(s) for s in o["sample"]];o["timing_source"]=source
+        for i,pc in enumerate(["PC1","PC2","PC3"],1):o[f"latent_{i}"]=zscore(orient(o[pc]))
+        timed=o[o.time_hours.notna()];role="trajectory" if timed.time_hours.nunique()>=2 else "context_only"
+        rows.append({"dataset":ds,"PCA_file_found":True,"n_samples":len(o),"n_timed_samples":len(timed),"n_unique_times":timed.time_hours.nunique(),"role":role,"timing_source":source,"path":str(path)});states.append(o)
+    av=pd.DataFrame(rows);st=pd.concat(states,ignore_index=True) if states else pd.DataFrame();av.to_csv(STAGE_DIRS[1]/"01_dataset_availability.csv",index=False);st.to_csv(STAGE_DIRS[1]/"02_master_sample_metadata.csv",index=False);return st,av
 
-def stage2_latent_state(states):
-    if states.empty: return states.copy()
-    out=states.copy()
-    for i,pc in enumerate(("PC1_z","PC2_z","PC3_z"),1): out[f"latent_{i}"]=out[pc] if pc in out else np.nan
-    out["latent_space_type"]="study_normalized_PCA"; return out
+def _curve(st,ds,grid):
+    g=st[(st.dataset==ds)&st.time_hours.notna()];m=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
+    if len(m)<2:return None
+    t=m.index.to_numpy(float);u=(t-t.min())/(t.max()-t.min());return np.column_stack([np.interp(grid,u,m[c]) for c in ["latent_1","latent_2","latent_3"]])
 
-def _trajectory_grid(states,dataset,grid):
-    g=states[(states["dataset"]==dataset)&states["time_hours"].notna()].copy()
-    if g["time_hours"].nunique()<2: return None
-    m=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index(); t=m.index.to_numpy(float); u=(t-t.min())/(t.max()-t.min())
-    return np.column_stack([np.interp(grid,u,m[c].to_numpy(float)) for c in ("latent_1","latent_2","latent_3")])
+def _rot(a,b):
+    aa=a-a.mean(0);bb=b-b.mean(0);u,_,vt=np.linalg.svd(aa.T@bb);return u@vt
 
-def _procrustes_rotation(source,target):
-    a=source-source.mean(axis=0); b=target-target.mean(axis=0); ua,_,vta=np.linalg.svd(a.T@b); return ua@vta
-
-def stage2_1_common_latent_state(states):
-    if states.empty: return states.copy()
-    trajectory_datasets=[d for d in states["dataset"].unique() if states.loc[(states["dataset"]==d)&states["time_hours"].notna(),"time_hours"].nunique()>=2]; grid=np.linspace(0,1,25)
-    curves={d:_trajectory_grid(states,d,grid) for d in trajectory_datasets}; curves={d:c for d,c in curves.items() if c is not None and np.isfinite(c).all()}
-    if not curves: return states.copy()
-    reference="GSE67462" if "GSE67462" in curves else sorted(curves)[0]; ref=curves[reference]; aligned={reference:ref}
-    for d,c in curves.items():
-        if d==reference: continue
-        aligned[d]=(c-c.mean(axis=0))@_procrustes_rotation(c,ref); s=np.std(aligned[d],axis=0,ddof=0); r=np.std(ref,axis=0,ddof=0); aligned[d]=aligned[d]*np.divide(r,np.where(s>0,s,1.0)); aligned[d]+=ref.mean(axis=0)
+def stage2_1_common_latent_state(st):
+    ds=[d for d in st.dataset.unique() if st[(st.dataset==d)&st.time_hours.notna()].time_hours.nunique()>=2];grid=np.linspace(0,1,25);cur={d:_curve(st,d,grid) for d in ds};cur={d:c for d,c in cur.items() if c is not None and np.isfinite(c).all()}
+    if not cur:return st
+    ref="GSE67462" if "GSE67462" in cur else sorted(cur)[0];aligned={ref:cur[ref]};r=cur[ref]
+    for d,c in cur.items():
+        if d==ref:continue
+        a=(c-c.mean(0))@_rot(c,r);a*=np.divide(np.std(r,0),np.where(np.std(a,0)>0,np.std(a,0),1));a+=r.mean(0);aligned[d]=a
     rows=[]
-    for dataset in trajectory_datasets:
-        if dataset not in aligned: continue
-        g=states[(states["dataset"]==dataset)&states["time_hours"].notna()].copy(); m=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index(); t=m.index.to_numpy(float); u=(t-t.min())/(t.max()-t.min()); a=aligned[dataset]
-        for tt,uu in zip(t,u): rows.append({"dataset":dataset,"time_hours":tt,"normalized_time":uu,"common_latent_1":np.interp(uu,grid,a[:,0]),"common_latent_2":np.interp(uu,grid,a[:,1]),"common_latent_3":np.interp(uu,grid,a[:,2]),"n_replicates":int((g["time_hours"]==tt).sum())})
-    common=pd.DataFrame(rows); common.to_csv(STAGE21/"01_common_latent_trajectory.csv",index=False)
-    out=states.copy(); out["common_latent_1"]=np.nan; out["common_latent_2"]=np.nan; out["common_latent_3"]=np.nan; out["common_latent_status"]="not_aligned"
-    for dataset in trajectory_datasets:
-        if dataset not in aligned: continue
-        idx=out.index[(out["dataset"]==dataset)&out["time_hours"].notna()]; g=out.loc[idx]; all_t=g["time_hours"].to_numpy(float); lo,hi=all_t.min(),all_t.max(); u=(g["time_hours"].to_numpy(float)-lo)/(hi-lo); a=aligned[dataset]
-        for j in range(3): out.loc[idx,f"common_latent_{j+1}"]=np.interp(u,grid,a[:,j])
+    for d,a in aligned.items():
+        g=st[(st.dataset==d)&st.time_hours.notna()];m=g.groupby("time_hours").size();lo,hi=g.time_hours.min(),g.time_hours.max()
+        for t,n in m.items():
+            u=(t-lo)/(hi-lo);v=np.array([np.interp(u,grid,a[:,j]) for j in range(3)]);rows.append({"dataset":d,"time_hours":t,"normalized_time":u,"common_latent_1":v[0],"common_latent_2":v[1],"common_latent_3":v[2],"n_replicates":n})
+    pd.DataFrame(rows).to_csv(STAGE21/"01_common_latent_trajectory.csv",index=False)
+    out=st.copy()
+    for j in range(1,4):out[f"common_latent_{j}"]=np.nan
+    out["common_latent_status"]="not_aligned"
+    # IMPORTANT: these columns remain the historical time-anchored trajectory coordinates;
+    # Stage 2.3 recomputes sample-level aligned coordinates from the actual latent samples.
+    for d,a in aligned.items():
+        idx=out.index[(out.dataset==d)&out.time_hours.notna()];lo,hi=out.loc[idx,"time_hours"].min(),out.loc[idx,"time_hours"].max();u=(out.loc[idx,"time_hours"].to_numpy()-lo)/(hi-lo)
+        for j in range(3):out.loc[idx,f"common_latent_{j+1}"]=np.interp(u,grid,a[:,j])
         out.loc[idx,"common_latent_status"]="time_anchored_aligned"
-    context=out[out["common_latent_status"]!="time_anchored_aligned"][["dataset","sample","time_hours","stage"]]; context.to_csv(STAGE21/"02_context_only_observations.csv",index=False)
-    pd.DataFrame({"reference_dataset":[reference],"trajectory_datasets":[";".join(sorted(curves))],"grid_points":[len(grid)],"alignment":["orthogonal Procrustes on normalized-time trajectories"],"fit_uses_context_only_data":[False],"interpretation":["trajectory geometry; not raw-expression equivalence"]}).to_csv(STAGE21/"03_alignment_metadata.csv",index=False); out.to_csv(STAGE21/"04_sample_common_latent_state.csv",index=False); return out
+    out.to_csv(STAGE21/"04_sample_common_latent_state.csv",index=False);pd.DataFrame({"reference_dataset":[ref],"trajectory_datasets":[";".join(sorted(aligned))],"grid_points":[25],"alignment":["orthogonal Procrustes on time-mean trajectories"]}).to_csv(STAGE21/"03_alignment_metadata.csv",index=False);return out
 
-def _pairwise_metrics(a,b):
-    xa=a[["common_latent_1","common_latent_2","common_latent_3"]].to_numpy(float); xb=b[["common_latent_1","common_latent_2","common_latent_3"]].to_numpy(float)
-    corr=np.corrcoef(xa.ravel(),xb.ravel())[0,1] if np.std(xa)>0 and np.std(xb)>0 else np.nan
-    rmse=float(np.sqrt(np.mean((xa-xb)**2))); path_a=float(np.sum(np.linalg.norm(np.diff(xa,axis=0),axis=1))); path_b=float(np.sum(np.linalg.norm(np.diff(xb,axis=0),axis=1)))
-    return corr,rmse,path_a,path_b
+def stage2_2_validate_common_latent(st):
+    g=st[st.common_latent_status=="time_anchored_aligned"];ds=sorted(g.dataset.unique());grid=np.linspace(0,1,25);cur={d:_curve(st,d,grid) for d in ds};cur={d:c for d,c in cur.items() if c is not None}
+    pairs=[]
+    for i,a in enumerate(ds):
+        for b in ds[i+1:]:
+            x,y=cur[a],cur[b];pairs.append({"dataset_a":a,"dataset_b":b,"trajectory_correlation":np.corrcoef(x.ravel(),y.ravel())[0,1],"aligned_rmse":np.sqrt(np.mean((x-y)**2)),"path_length_a":np.linalg.norm(np.diff(x,axis=0),axis=1).sum(),"path_length_b":np.linalg.norm(np.diff(y,axis=0),axis=1).sum()})
+    p=pd.DataFrame(pairs);p["path_length_ratio"]=p.path_length_a/p.path_length_b;p.to_csv(STAGE22/"02_cross_dataset_distances.csv",index=False)
+    q=[]
+    for d in ds:
+        r=np.mean([cur[x] for x in ds if x!=d],axis=0);x=cur[d];q.append({"dataset":d,"leave_one_dataset_out_reference_rmse":np.sqrt(np.mean((x-r)**2)),"leave_one_dataset_out_correlation":np.corrcoef(x.ravel(),r.ravel())[0,1]})
+    q=pd.DataFrame(q);q.to_csv(STAGE22/"01_alignment_quality.csv",index=False)
+    mean=np.mean(list(cur.values()),axis=0);cc=[]
+    for k,u in enumerate(grid):cc.append({"normalized_time":u,"mean_common_latent_1":mean[k,0],"mean_common_latent_2":mean[k,1],"mean_common_latent_3":mean[k,2],"cross_dataset_dispersion":np.mean(np.linalg.norm(np.vstack([cur[d][k] for d in ds])-mean[k],axis=1))})
+    cc=pd.DataFrame(cc);cc.to_csv(STAGE22/"03_trajectory_concordance.csv",index=False)
+    sens=[]
+    for ref in ds:
+        for test in ds:
+            if ref==test:continue
+            c=_curve(st,test,grid);a=(c-c.mean(0))@_rot(c,cur[ref]);a*=np.divide(np.std(cur[ref],0),np.where(np.std(a,0)>0,np.std(a,0),1));a+=cur[ref].mean(0);sens.append({"reference_dataset":ref,"test_dataset":test,"reference_sensitivity_rmse":np.sqrt(np.mean((a-cur[ref])**2))})
+    s=pd.DataFrame(sens);s.to_csv(STAGE22/"04_reference_sensitivity.csv",index=False)
+    summary=pd.DataFrame({"metric":["n_trajectory_datasets","n_pairwise_comparisons","mean_pairwise_correlation","median_pairwise_rmse","mean_cross_dataset_dispersion","mean_reference_sensitivity_rmse"],"value":[len(ds),len(p),p.trajectory_correlation.mean(),p.aligned_rmse.median(),cc.cross_dataset_dispersion.mean(),s.reference_sensitivity_rmse.mean()]});summary.to_csv(STAGE22/"05_common_latent_validation.csv",index=False);return summary
 
-def stage2_2_validate_common_latent(states):
-    """Stage 2.2: quantify concordance and test whether alignment is reference-dependent."""
-    if states.empty: return pd.DataFrame()
-    traj=states[(states["common_latent_status"]=="time_anchored_aligned")&states["time_hours"].notna()].copy(); datasets=sorted(traj["dataset"].unique()); grid=np.linspace(0,1,25); curves={}
-    for d in datasets:
-        g=traj[traj["dataset"]==d].groupby("time_hours")[["common_latent_1","common_latent_2","common_latent_3"]].mean().sort_index(); t=g.index.to_numpy(float); u=(t-t.min())/(t.max()-t.min()); curves[d]=np.column_stack([np.interp(grid,u,g[c].to_numpy(float)) for c in ("common_latent_1","common_latent_2","common_latent_3")])
-    pair_rows=[]
-    for i,a in enumerate(datasets):
-        for b in datasets[i+1:]:
-            aa=pd.DataFrame(curves[a],columns=["common_latent_1","common_latent_2","common_latent_3"]); bb=pd.DataFrame(curves[b],columns=aa.columns); corr,rmse,pa,pb=_pairwise_metrics(aa,bb); pair_rows.append({"dataset_a":a,"dataset_b":b,"trajectory_correlation":corr,"aligned_rmse":rmse,"path_length_a":pa,"path_length_b":pb,"path_length_ratio":pa/pb if pb>0 else np.nan})
-    pairwise=pd.DataFrame(pair_rows); pairwise.to_csv(STAGE22/"02_cross_dataset_distances.csv",index=False)
-    quality=[]
-    for d in datasets:
-        c=curves[d]; ref=np.mean([curves[x] for x in datasets if x!=d],axis=0) if len(datasets)>1 else c; rmse=float(np.sqrt(np.mean((c-ref)**2))); corr=float(np.corrcoef(c.ravel(),ref.ravel())[0,1]) if np.std(c)>0 and np.std(ref)>0 else np.nan; quality.append({"dataset":d,"leave_one_dataset_out_reference_rmse":rmse,"leave_one_dataset_out_correlation":corr})
-    q=pd.DataFrame(quality); q.to_csv(STAGE22/"01_alignment_quality.csv",index=False)
-    mean_curve=np.mean(list(curves.values()),axis=0); rows=[]
-    for k,u in enumerate(grid):
-        vals=np.vstack([curves[d][k] for d in datasets]); rows.append({"normalized_time":u,"mean_common_latent_1":mean_curve[k,0],"mean_common_latent_2":mean_curve[k,1],"mean_common_latent_3":mean_curve[k,2],"cross_dataset_dispersion":float(np.mean(np.linalg.norm(vals-mean_curve[k],axis=1)))})
-    concord=pd.DataFrame(rows); concord.to_csv(STAGE22/"03_trajectory_concordance.csv",index=False)
-    sens=[]; raw_states=states.copy()
-    for ref in datasets:
-        ref_curve=curves[ref]
-        for d in datasets:
-            if d==ref: continue
-            c=_trajectory_grid(raw_states,d,grid); aligned=(c-c.mean(axis=0))@_procrustes_rotation(c,ref_curve); s=np.std(aligned,axis=0); r=np.std(ref_curve,axis=0); aligned=aligned*np.divide(r,np.where(s>0,s,1.0)); aligned+=ref_curve.mean(axis=0); rmse=float(np.sqrt(np.mean((aligned-ref_curve)**2))); sens.append({"reference_dataset":ref,"test_dataset":d,"reference_sensitivity_rmse":rmse})
-    sensitivity=pd.DataFrame(sens); sensitivity.to_csv(STAGE22/"04_reference_sensitivity.csv",index=False)
-    summary=pd.DataFrame({"metric":["n_trajectory_datasets","n_pairwise_comparisons","mean_pairwise_correlation","median_pairwise_rmse","mean_cross_dataset_dispersion","mean_reference_sensitivity_rmse"],"value":[len(datasets),len(pairwise),pairwise["trajectory_correlation"].mean() if len(pairwise) else np.nan,pairwise["aligned_rmse"].median() if len(pairwise) else np.nan,concord["cross_dataset_dispersion"].mean() if len(concord) else np.nan,sensitivity["reference_sensitivity_rmse"].mean() if len(sensitivity) else np.nan]}); summary.to_csv(STAGE22/"05_common_latent_validation.csv",index=False)
-    report=["Dynamics v4.3 — Stage 2.2 validation","","Purpose: quantify whether the common latent geometry is stable across independent datasets.","","Metrics: pairwise trajectory correlation, aligned RMSE, path-length ratio, leave-one-dataset-out reference comparison, normalized-time dispersion, and reference sensitivity.","","Interpretation boundary: high concordance supports reproducibility of trajectory geometry, but does not prove molecular equivalence, causality, or universality across species/platforms."]
-    (STAGE22/"REPORT.txt").write_text("\n".join(report),encoding="utf-8"); return summary
+def stage2_3_within_time_residual_validation(st):
+    """Apply trajectory-derived Procrustes transforms to REAL samples.
 
-def print_stage22_validation(summary):
-    """Print the Stage 2.2 evidence needed for the go/no-go decision."""
-    files = {
-        "ALIGNMENT QUALITY": STAGE22 / "01_alignment_quality.csv",
-        "PAIRWISE DISTANCES": STAGE22 / "02_cross_dataset_distances.csv",
-        "TRAJECTORY CONCORDANCE": STAGE22 / "03_trajectory_concordance.csv",
-        "REFERENCE SENSITIVITY": STAGE22 / "04_reference_sensitivity.csv",
-        "SUMMARY": STAGE22 / "05_common_latent_validation.csv",
-    }
-    print("\n" + "=" * 88)
-    print("STAGE 2.2 VALIDATION — FULL CONSOLE INSPECTION")
-    print("=" * 88)
-    for title, path in files.items():
-        print(f"\n--- {title} ---")
-        if not path.exists():
-            print(f"MISSING: {path}")
-            continue
-        try:
-            df = pd.read_csv(path)
-            if df.empty:
-                print("EMPTY")
-            else:
-                with pd.option_context("display.max_rows", None, "display.max_columns", None, "display.width", 220, "display.max_colwidth", 80):
-                    print(df.to_string(index=False))
-        except Exception as exc:
-            print(f"ERROR READING {path}: {exc}")
-    if summary is not None and not summary.empty:
-        print("\n--- AUTOMATIC GO/NO-GO FLAGS ---")
-        vals=dict(zip(summary["metric"],summary["value"]))
-        corr=vals.get("mean_pairwise_correlation",np.nan); rmse=vals.get("median_pairwise_rmse",np.nan); disp=vals.get("mean_cross_dataset_dispersion",np.nan); sens=vals.get("mean_reference_sensitivity_rmse",np.nan)
-        print(f"mean_pairwise_correlation = {corr:.6f}")
-        print(f"median_pairwise_rmse = {rmse:.6f}")
-        print(f"mean_cross_dataset_dispersion = {disp:.6f}")
-        print(f"mean_reference_sensitivity_rmse = {sens:.6f}")
-        print("NOTE: these are diagnostics, not statistical proof. High concordance can be produced by the time-anchored alignment itself.")
-        print("NEXT DECISION: inspect within-time residuals before treating the common latent space as biologically informative.")
-    print("=" * 88 + "\n")
-
-def stage3_trajectory_reconstruction(states):
-    if states.empty: return pd.DataFrame()
-    rows=[]; timed=states[states["time_hours"].notna()]
-    for dataset,g in timed.groupby("dataset"):
-        if g["time_hours"].nunique()<2: continue
-        cols=[c for c in ("common_latent_1","common_latent_2","common_latent_3") if c in g and g[c].notna().any()]
-        if len(cols)<3: continue
-        m=g.groupby("time_hours")[cols].mean().sort_index().reset_index(); m.insert(0,"dataset",dataset); m["n_replicates"]=g.groupby("time_hours").size().reindex(m["time_hours"]).to_numpy(); rows.append(m)
-    traj=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame(); traj.to_csv(STAGE_DIRS[3]/"01_reconstructed_trajectories.csv",index=False); return traj
-
-def stage4_dynamics(traj):
-    if traj.empty: return traj.copy()
-    out=traj.copy()
-    for dataset,idx in out.groupby("dataset").groups.items():
-        sub=out.loc[idx].sort_values("time_hours"); t=sub["time_hours"].to_numpy(float)
-        for axis in ("common_latent_1","common_latent_2","common_latent_3"):
-            x=sub[axis].to_numpy(float); v=derivative(x,t) if len(x)>=2 else np.full(len(x),np.nan); a=derivative(v,t) if len(x)>=3 else np.full(len(x),np.nan); out.loc[sub.index,f"d{axis}_dt"]=v; out.loc[sub.index,f"d2{axis}_dt2"]=a
-    vcols=[f"dcommon_latent_{i}_dt" for i in (1,2,3)]; acols=[f"d2common_latent_{i}_dt2" for i in (1,2,3)]; out["state_speed"]=np.sqrt(np.nansum(out[vcols].to_numpy(float)**2,axis=1)); out["state_acceleration"]=np.sqrt(np.nansum(out[acols].to_numpy(float)**2,axis=1)); out.to_csv(STAGE_DIRS[4]/"01_dynamics.csv",index=False); return out
-
-def stage5_critical_transitions(dynamics):
-    if dynamics.empty: return dynamics.copy()
-    out=dynamics.copy(); out["rolling_variance_latent1"]=np.nan; out["rolling_autocorrelation_latent1"]=np.nan
-    for dataset,idx in out.groupby("dataset").groups.items():
-        sub=out.loc[idx].sort_values("time_hours"); s=sub["common_latent_1"]
-        if len(s)>=3:
-            w=min(5,len(s)); out.loc[sub.index,"rolling_variance_latent1"]=s.rolling(w,min_periods=3).var().to_numpy(); out.loc[sub.index,"rolling_autocorrelation_latent1"]=s.rolling(w,min_periods=3).apply(lambda q:q.autocorr(1) if q.std()>0 else np.nan).to_numpy()
-    out["critical_transition_flag"]=False; out.to_csv(STAGE_DIRS[5]/"01_critical_transition_indicators.csv",index=False); return out
-
-def stage6_symbolic_equation_discovery(dynamics):
-    if dynamics.empty: return pd.DataFrame()
+    The transform is fitted only from time-mean trajectories. Individual PCA
+    samples are then transformed without replacing them by their time mean.
+    This preserves replicate/sample variation and allows a genuine residual test.
+    """
+    traj=[d for d in st.dataset.unique() if st[(st.dataset==d)&st.time_hours.notna()].time_hours.nunique()>=2];grid=np.linspace(0,1,25);raw={d:_curve(st,d,grid) for d in traj};raw={d:c for d,c in raw.items() if c is not None};ref="GSE67462" if "GSE67462" in raw else sorted(raw)[0];trans={ref:(np.eye(3),np.zeros(3),np.ones(3))};R=raw[ref]
+    # Store rotation, source/target centering and axis scale; fit only on means.
+    for d,c in raw.items():
+        if d==ref:continue
+        rot=_rot(c,R);a=(c-c.mean(0))@rot;scale=np.divide(np.std(R,0),np.where(np.std(a,0)>0,np.std(a,0),1));trans[d]=(rot,c.mean(0),scale)
+    out=st.copy();
+    for j in range(1,4):out[f"aligned_sample_latent_{j}"]=np.nan;out[f"aligned_time_mean_{j}"]=np.nan;out[f"within_time_residual_{j}"]=np.nan
+    out["within_time_residual_norm"]=np.nan
+    for d in traj:
+        if d not in trans:continue
+        rot,cm,scale=trans[d];idx=out.index[(out.dataset==d)&out.time_hours.notna()];x=out.loc[idx,["latent_1","latent_2","latent_3"]].to_numpy(float);xa=(x-cm)@rot;xa*=scale;xa+=R.mean(0)
+        out.loc[idx,["aligned_sample_latent_1","aligned_sample_latent_2","aligned_sample_latent_3"]]=xa
+        means=pd.DataFrame(xa,index=idx).groupby(out.loc[idx,"time_hours"]).transform("mean").to_numpy();out.loc[idx,["aligned_time_mean_1","aligned_time_mean_2","aligned_time_mean_3"]]=means
+        res=xa-means
+        for j in range(3):out.loc[idx,f"within_time_residual_{j+1}"]=res[:,j]
+        out.loc[idx,"within_time_residual_norm"]=np.linalg.norm(res,axis=1)
+    timed=out[out.time_hours.notna() & out.aligned_sample_latent_1.notna()].copy();summary=[];rep=[]
+    for d,g in timed.groupby("dataset"):
+        summary.append({"dataset":d,"n_samples":len(g),"n_times":g.time_hours.nunique(),"mean_within_time_residual_norm":g.within_time_residual_norm.mean(),"median_within_time_residual_norm":g.within_time_residual_norm.median(),"p95_within_time_residual_norm":g.within_time_residual_norm.quantile(.95),"within_time_sd_latent1":g.within_time_residual_1.std(ddof=1)})
+        for t,h in g.groupby("time_hours"):
+            if len(h)>=2:
+                vals=h[["aligned_sample_latent_1","aligned_sample_latent_2","aligned_sample_latent_3"]].to_numpy();dist=np.linalg.norm(vals[0]-vals[1]) if len(vals)==2 else np.mean([np.linalg.norm(vals[i]-vals[j]) for i in range(len(vals)) for j in range(i+1,len(vals))]);rep.append({"dataset":d,"time_hours":t,"n_replicates":len(h),"replicate_pair_distance":dist})
+    sm=pd.DataFrame(summary);rp=pd.DataFrame(rep);sm.to_csv(STAGE23/"01_within_time_residual_summary.csv",index=False);rp.to_csv(STAGE23/"02_replicate_distances.csv",index=False);out.to_csv(STAGE23/"03_sample_level_aligned_states.csv",index=False)
+    # Compare raw vs aligned mean-trajectory concordance to detect alignment-created agreement.
     rows=[]
-    for dataset,g in dynamics.groupby("dataset"):
-        x=g["common_latent_1"].to_numpy(float); target=g["dcommon_latent_1_dt"].to_numpy(float); rows.append(pd.DataFrame({"dataset":dataset,"time_hours":g["time_hours"].to_numpy(float),"x":x,"target_dx_dt":target,"x2":x*x,"x3":x*x*x,"abs_x":np.abs(x),"sin_x":np.sin(x),"cos_x":np.cos(x),"log1p_abs_x":np.log1p(np.abs(x))}))
-    table=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame(); table.to_csv(STAGE_DIRS[6]/"01_symbolic_regression_design.csv",index=False); pd.DataFrame({"candidate_form":["dx/dt = f(x)","dx/dt = f(x,y)","dx/dt = f(x,y,z)"],"method":["symbolic regression"]*3,"validation":["complete-dataset holdout"]*3,"status":["planned"]*3}).to_csv(STAGE_DIRS[6]/"02_symbolic_plan.csv",index=False); return table
+    for i,a in enumerate(traj):
+        for b in traj[i+1:]:
+            ca,cb=raw[a],raw[b];aa=(ca-ca.mean(0))@_rot(ca,cb);aa*=np.divide(np.std(cb,0),np.where(np.std(aa,0)>0,np.std(aa,0),1));aa+=cb.mean(0)
+            rawcorr=np.corrcoef(ca.ravel(),cb.ravel())[0,1];alignedcorr=np.corrcoef(aa.ravel(),cb.ravel())[0,1]
+            rows.append({"dataset_a":a,"dataset_b":b,"raw_trajectory_correlation":rawcorr,"post_procrustes_correlation":alignedcorr,"correlation_gain":alignedcorr-rawcorr,"raw_rmse":np.sqrt(np.mean((ca-cb)**2)),"post_procrustes_rmse":np.sqrt(np.mean((aa-cb)**2))})
+    gain=pd.DataFrame(rows);gain.to_csv(STAGE23/"04_raw_vs_aligned_concordance.csv",index=False)
+    # Between-study distance versus typical within-study replicate distance.
+    between=[]
+    for i,a in enumerate(traj):
+        for b in traj[i+1:]:
+            between.append({"dataset_a":a,"dataset_b":b,"mean_trajectory_distance":np.mean(np.linalg.norm(raw[a]-raw[b],axis=1))})
+    bd=pd.DataFrame(between);wd=rp.groupby("dataset").replicate_pair_distance.median().rename("median_replicate_distance") if not rp.empty else pd.Series(dtype=float);ratio=[]
+    for _,r in bd.iterrows():ratio.append({**r.to_dict(),"median_within_replicate_distance_a":wd.get(r.dataset_a,np.nan),"median_within_replicate_distance_b":wd.get(r.dataset_b,np.nan),"between_to_within_ratio":r.mean_trajectory_distance/np.nanmean([wd.get(r.dataset_a,np.nan),wd.get(r.dataset_b,np.nan)])})
+    ratio=pd.DataFrame(ratio);ratio.to_csv(STAGE23/"05_between_vs_within_distance.csv",index=False)
+    report=pd.DataFrame({"metric":["reference_dataset","trajectory_datasets","mean_within_time_residual","median_within_time_residual","mean_correlation_gain_from_alignment","mean_between_to_within_ratio"],"value":[ref,";".join(traj),sm.mean_within_time_residual_norm.mean(),sm.median_within_time_residual_norm.median(),gain.correlation_gain.mean(),ratio.between_to_within_ratio.mean()]});report.to_csv(STAGE23/"06_stage23_decision_metrics.csv",index=False)
+    return out,report
 
-def stage7_heldout_validation(dynamics):
-    datasets=sorted(dynamics["dataset"].unique()) if not dynamics.empty else []; rows=[{"held_out_dataset":test,"training_datasets":";".join(d for d in datasets if d!=test),"validation_type":"leave-one-complete-dataset-out","status":"planned"} for test in datasets]; plan=pd.DataFrame(rows); plan.to_csv(STAGE_DIRS[7]/"01_heldout_validation_plan.csv",index=False); return plan
-
-def stage8_regulatory_integration(dynamics):
-    if dynamics.empty: return pd.DataFrame()
-    plan=pd.DataFrame([{"expression_dataset":d,"regulatory_dataset":"GSE67520","integration":"time-aligned regulatory evidence","causal_claim":False,"status":"planned"} for d in sorted(dynamics["dataset"].unique())]); plan.to_csv(STAGE_DIRS[8]/"01_regulatory_integration_plan.csv",index=False); return plan
-
-def stage9_predictive_ai(dynamics):
-    if dynamics.empty: return pd.DataFrame()
+def stage3_trajectory_reconstruction(st):
     rows=[]
-    for dataset,g in dynamics.groupby("dataset"):
+    for d,g in st[st.time_hours.notna()].groupby("dataset"):
+        if g.time_hours.nunique()<2:continue
+        cols=[f"aligned_sample_latent_{i}" for i in (1,2,3)]
+        if not all(c in g and g[c].notna().any() for c in cols):cols=[f"common_latent_{i}" for i in (1,2,3)]
+        m=g.groupby("time_hours")[cols].mean().sort_index().reset_index();m.insert(0,"dataset",d);m.columns=["dataset","time_hours","common_latent_1","common_latent_2","common_latent_3"];rows.append(m)
+    out=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame();out.to_csv(STAGE_DIRS[3]/"01_reconstructed_trajectories.csv",index=False);return out
+
+def derivative(x,t):
+    if len(x)<2:return np.full(len(x),np.nan)
+    if np.any(np.diff(t)<=0):raise ValueError("Non-increasing time")
+    return np.gradient(x,t) if len(x)>2 else np.repeat((x[1]-x[0])/(t[1]-t[0]),2)
+
+def stage4_dynamics(tr):
+    out=tr.copy()
+    for d,idx in out.groupby("dataset").groups.items():
+        q=out.loc[idx].sort_values("time_hours");t=q.time_hours.to_numpy(float)
+        for j in (1,2,3):
+            v=derivative(q[f"common_latent_{j}"].to_numpy(float),t);out.loc[q.index,f"dcommon_latent_{j}_dt"]=v
+        out.loc[q.index,"state_speed"]=np.sqrt(np.nansum(out.loc[q.index,[f"dcommon_latent_{j}_dt" for j in (1,2,3)]].to_numpy()**2,axis=1))
+    out.to_csv(STAGE_DIRS[4]/"01_dynamics.csv",index=False);return out
+
+def stage5_critical_transitions(d):
+    out=d.copy();out["rolling_variance_latent1"]=np.nan;out["rolling_autocorrelation_latent1"]=np.nan
+    for _,idx in out.groupby("dataset").groups.items():
+        q=out.loc[idx].sort_values("time_hours");s=q.common_latent_1;w=min(5,len(s));out.loc[q.index,"rolling_variance_latent1"]=s.rolling(w,min_periods=3).var().to_numpy();out.loc[q.index,"rolling_autocorrelation_latent1"]=s.rolling(w,min_periods=3).apply(lambda z:z.autocorr(1) if z.std()>0 else np.nan).to_numpy()
+    out["critical_transition_flag"]=False;out.to_csv(STAGE_DIRS[5]/"01_critical_transition_indicators.csv",index=False);return out
+
+def stage6_symbolic_equation_discovery(d):
+    if d.empty:return pd.DataFrame()
+    o=pd.DataFrame({"dataset":d.dataset,"time_hours":d.time_hours,"x":d.common_latent_1,"target_dx_dt":d.dcommon_latent_1_dt});o["x2"]=o.x**2;o["x3"]=o.x**3;o["abs_x"]=o.x.abs();o["sin_x"]=np.sin(o.x);o["cos_x"]=np.cos(o.x);o.to_csv(STAGE_DIRS[6]/"01_symbolic_regression_design.csv",index=False);return o
+
+def stage7_heldout_validation(d):
+    ds=sorted(d.dataset.unique()) if not d.empty else [];o=pd.DataFrame([{"held_out_dataset":x,"training_datasets":";".join(y for y in ds if y!=x),"validation_type":"leave-one-complete-dataset-out","status":"planned"} for x in ds]);o.to_csv(STAGE_DIRS[7]/"01_heldout_validation_plan.csv",index=False);return o
+
+def stage8_regulatory_integration(d):
+    ds=sorted(d.dataset.unique()) if not d.empty else [];o=pd.DataFrame([{"expression_dataset":x,"regulatory_dataset":"GSE67520","integration":"time-aligned regulatory evidence","causal_claim":False,"status":"planned"} for x in ds]);o.to_csv(STAGE_DIRS[8]/"01_regulatory_integration_plan.csv",index=False);return o
+
+def stage9_predictive_ai(d):
+    rows=[]
+    for ds,g in d.groupby("dataset"):
         g=g.sort_values("time_hours")
         for i in range(len(g)-1):
-            a,b=g.iloc[i],g.iloc[i+1]; rows.append({"dataset":dataset,"time_t":a["time_hours"],"time_next":b["time_hours"],"dt_hours":b["time_hours"]-a["time_hours"],"latent_1_t":a["common_latent_1"],"latent_2_t":a["common_latent_2"],"latent_3_t":a["common_latent_3"],"latent_1_next":b["common_latent_1"],"latent_2_next":b["common_latent_2"],"latent_3_next":b["common_latent_3"]})
-    table=pd.DataFrame(rows); table.to_csv(STAGE_DIRS[9]/"01_next_state_prediction_table.csv",index=False); pd.DataFrame({"model_target":["z(t+dt) from z(t), dt"],"validation_unit":["complete_dataset"],"status":["preparation_only"]}).to_csv(STAGE_DIRS[9]/"02_ai_prediction_plan.csv",index=False); return table
+            a,b=g.iloc[i],g.iloc[i+1];rows.append({"dataset":ds,"time_t":a.time_hours,"time_next":b.time_hours,"dt_hours":b.time_hours-a.time_hours,"latent_1_t":a.common_latent_1,"latent_2_t":a.common_latent_2,"latent_3_t":a.common_latent_3,"latent_1_next":b.common_latent_1,"latent_2_next":b.common_latent_2,"latent_3_next":b.common_latent_3})
+    o=pd.DataFrame(rows);o.to_csv(STAGE_DIRS[9]/"01_next_state_prediction_table.csv",index=False);return o
+
+def print_stage23(out,report):
+    print("\n"+"="*88+"\nSTAGE 2.3 — WITHIN-TIME RESIDUAL VALIDATION\n"+"="*88)
+    for title,file in [("RESIDUAL SUMMARY","01_within_time_residual_summary.csv"),("REPLICATE DISTANCES","02_replicate_distances.csv"),("RAW VS ALIGNED","04_raw_vs_aligned_concordance.csv"),("BETWEEN VS WITHIN","05_between_vs_within_distance.csv"),("DECISION METRICS","06_stage23_decision_metrics.csv")]:
+        print(f"\n--- {title} ---");p=STAGE23/file
+        if p.exists():
+            with pd.option_context("display.max_rows",None,"display.max_columns",None,"display.width",220):print(pd.read_csv(p).to_string(index=False))
+    print("\n--- INTERPRETATION ---")
+    if report is not None and not report.empty:
+        v=dict(zip(report.metric,report.value));print(f"mean_within_time_residual = {float(v['mean_within_time_residual']):.6f}");print(f"median_within_time_residual = {float(v['median_within_time_residual']):.6f}");print(f"mean_correlation_gain_from_alignment = {float(v['mean_correlation_gain_from_alignment']):.6f}");print(f"mean_between_to_within_ratio = {float(v['mean_between_to_within_ratio']):.6f}")
+    print("NOTE: Stage 2.3 is the first check that retains actual replicate/sample variation. A low residual alone is not sufficient; alignment gain and between/within distance must also be considered.");print("="*88+"\n")
 
 def main():
-    states,av=stage1_data_integration(); states=stage2_latent_state(states); states=stage2_1_common_latent_state(states); validation=stage2_2_validate_common_latent(states); print_stage22_validation(validation); traj=stage3_trajectory_reconstruction(states); dyn=stage4_dynamics(traj); dyn=stage5_critical_transitions(dyn); sym=stage6_symbolic_equation_discovery(dyn); hold=stage7_heldout_validation(dyn); reg=stage8_regulatory_integration(dyn); pred=stage9_predictive_ai(dyn)
-    report=["Dynamics v4.3 — stages 1-9","","Stage 1: data integration and metadata harmonisation.","Stage 2: study-normalized latent state representation.","Stage 2.1: time-anchored common trajectory geometry.","Stage 2.2: common latent-space validation with full console inspection.","Stage 3: time-aware trajectory reconstruction.","Stage 4: derivative-based dynamics.","Stage 5: critical-transition/stability indicators.","Stage 6: symbolic equation-discovery design; no equation fitted.","Stage 7: complete-dataset held-out validation plan.","Stage 8: regulatory integration plan using GSE67520.","Stage 9: next-state predictive AI design; no model fitted.","","Scientific boundary: Stage 2.1/2.2 test trajectory geometry, not raw-expression equivalence or biological universality. Stages 6-9 remain preparation layers until validation is satisfactory."]
-    (OUT/"REPORT.txt").write_text("\n".join(report),encoding="utf-8")
-    print(f"Dynamics v4.3 results written to: {OUT}"); print(f"Datasets with PCA: {int(av['PCA_file_found'].sum())}/{len(DATASETS)}"); print(f"Stage 2.1 aligned trajectory datasets: {states['common_latent_status'].eq('time_anchored_aligned').groupby(states['dataset']).any().sum() if not states.empty else 0}"); print(f"Stage 2.2 validation rows: {len(validation)}"); print(f"Trajectory timepoints: {len(traj)}"); print(f"Stage 6 symbolic rows: {len(sym)}"); print(f"Stage 7 held-out datasets: {len(hold)}"); print(f"Stage 8 regulatory rows: {len(reg)}"); print(f"Stage 9 prediction pairs: {len(pred)}")
+    st,av=stage1_data_integration();st=stage2_1_common_latent_state(st);v22=stage2_2_validate_common_latent(st);st,v23=stage2_3_within_time_residual_validation(st);print_stage23(st,v23);tr=stage3_trajectory_reconstruction(st);dy=stage4_dynamics(tr);dy=stage5_critical_transitions(dy);s=stage6_symbolic_equation_discovery(dy);h=stage7_heldout_validation(dy);r=stage8_regulatory_integration(dy);p=stage9_predictive_ai(dy)
+    (OUT/"REPORT.txt").write_text("Dynamics v4.4\n\nStage 2.3 now validates sample-level residuals after applying transforms fitted only on time-mean trajectories. Stages 6-9 remain preparation layers; symbolic equations and AI models are not fitted.\n",encoding="utf-8")
+    print(f"Dynamics v4.4 results written to: {OUT}");print(f"Datasets with PCA: {int(av.PCA_file_found.sum())}/{len(DATASETS)}");print(f"Stage 2.1 aligned trajectory datasets: {st[st.common_latent_status=='time_anchored_aligned'].dataset.nunique()}");print(f"Stage 2.2 validation rows: {len(v22)}");print(f"Stage 2.3 residual datasets: {st[st.aligned_sample_latent_1.notna()].dataset.nunique()}");print(f"Trajectory timepoints: {len(tr)}");print(f"Stage 6 symbolic rows: {len(s)}");print(f"Stage 7 held-out datasets: {len(h)}");print(f"Stage 8 regulatory rows: {len(r)}");print(f"Stage 9 prediction pairs: {len(p)}")
 
-if __name__=="__main__": main()
+if __name__=="__main__":main()
