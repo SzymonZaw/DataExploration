@@ -12,7 +12,20 @@ OUT = ROOT / "results" / "GSE67520"
 OUT.mkdir(parents=True, exist_ok=True)
 ARCHIVE = DATA / "GSE67520_RAW.tar"
 
-MARKS = ["Oct4", "H3K4me1", "H3K27ac", "H3K4me3", "H3K27me3", "RNAPII", "input_DNA"]
+MARK_ALIASES = {
+    "flag": "FLAG_control",
+    "oct4": "Oct4",
+    "k4me1": "H3K4me1",
+    "h3k4me1": "H3K4me1",
+    "k27ac": "H3K27ac",
+    "h3k27ac": "H3K27ac",
+    "k4me3": "H3K4me3",
+    "h3k4me3": "H3K4me3",
+    "k27me3": "H3K27me3",
+    "h3k27me3": "H3K27me3",
+    "rnapii": "RNAPII",
+    "input_dna": "input_DNA",
+}
 
 
 def parse_peak_file(path):
@@ -39,7 +52,11 @@ def parse_peak_file(path):
 
 def classify(name):
     n = name.lower()
-    mark = next((m for m in MARKS if m.lower() in n), "unknown")
+    mark = "unknown"
+    for token, label in MARK_ALIASES.items():
+        if token in n:
+            mark = label
+            break
     day = None
     if "ipsc" in n:
         day = "iPSC"
@@ -121,7 +138,7 @@ def inspect_archive():
 
     fig, ax = plt.subplots(figsize=(12, 7))
     for mark, sub in summary.groupby("mark"):
-        if mark == "input_DNA":
+        if mark in {"input_DNA", "FLAG_control", "unknown"}:
             continue
         ax.plot(sub["stage"], sub["peaks"], marker="o", label=mark)
     ax.set_ylabel("Number of peaks")
@@ -147,6 +164,7 @@ def inspect_archive():
         "Marks observed: " + ", ".join(sorted(summary["mark"].unique())),
         "Stages observed: " + ", ".join(stage_order),
         "Important interpretation: a peak is a genomic region with enriched ChIP-seq signal; more peaks does not automatically mean higher gene expression.",
+        "FLAG files are kept as a separate control category rather than being interpreted as a histone mark.",
         "This exploration summarizes peak counts, lengths, genomic coverage and stage/mark dynamics. It does not perform differential peak calling.",
     ]
     (OUT / "REPORT.txt").write_text("\n".join(report), encoding="utf-8")
