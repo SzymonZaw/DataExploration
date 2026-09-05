@@ -1,8 +1,9 @@
-"""Dynamics v5.4 — biological gene-level harmonization for OSKM dynamics."""
+"""Dynamics v5.5 — biological gene-level harmonization for OSKM dynamics."""
 from pathlib import Path
 import re
 import ssl
 import urllib.request
+import urllib.parse
 from io import StringIO
 import numpy as np
 import pandas as pd
@@ -75,7 +76,7 @@ def stage1_data_integration():
     availability=pd.DataFrame(rows); state=pd.concat(states,ignore_index=True) if states else pd.DataFrame(); availability.to_csv(OUT/"stage1/01_dataset_availability.csv",index=False); state.to_csv(OUT/"stage1/02_master_sample_metadata.csv",index=False); return state,availability
 
 def curve(state,ds,grid,branch=None):
-    g=state[(state.dataset==ds)&state.time_hours.notna()];
+    g=state[(state.dataset==ds)&state.time_hours.notna()]
     if branch is not None:g=g[g.condition==branch]
     m=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
     if len(m)<2:return None
@@ -124,7 +125,7 @@ def branches(state):
 def stage2_4(state):
     rows=[]; grid=np.linspace(0,1,25); ref="GSE67462"
     for ds,branch in branches(state):
-        mask=(state.dataset==ds)&state.time_hours.notna();
+        mask=(state.dataset==ds)&state.time_hours.notna()
         if branch!="all":mask&=state.condition==branch
         g=state[mask]; times=sorted(g.time_hours.unique())
         if len(times)<3:continue
@@ -138,9 +139,18 @@ def stage2_4(state):
             tu=(m.index.to_numpy(float)-lo)/(hi-lo); target=np.column_stack([np.interp(grid,tu,m[c]) for c in ("latent_1","latent_2","latent_3")]); tr=fit_transform(target,ref_curve); hu=(held-lo)/(hi-lo); observed=g[g.time_hours==held][["latent_1","latent_2","latent_3"]].mean().to_numpy(float); observed_common=apply_transform(observed.reshape(1,-1),tr)[0]; ref_pred=np.array([np.interp(hu,grid,ref_curve[:,j]) for j in range(3)]); naive=float(np.linalg.norm(observed_common-ref_pred)); rows.append({"dataset":ds,"trajectory_branch":branch,"held_out_time_hours":held,"n_train_times":len(train),"oos_error":float(np.linalg.norm(observed_common-np.array([np.interp(hu,grid,target[:,j]) for j in range(3)]))),"naive_error":naive,"error_reduction_vs_naive":naive,"relative_error":1.0})
     df=pd.DataFrame(rows); df.to_csv(STAGE24/"01_leave_one_timepoint_out.csv",index=False); return df
 
+def read_feature_matrix(path):
+    df=pd.read_csv(path,index_col=0); df=df.apply(pd.to_numeric,errors="coerce"); df=df.dropna(axis=0,how="all").dropna(axis=1,how="all"); df.index=df.index.astype(str); return df.groupby(level=0).mean()
+
+def normalize_gene_symbol(x):
+    s=str(x).strip().upper(); return s if s and s not in {"NAN","NA","NONE","NULL","-","."} else None
+
+def clean_refseq(x):
+    s=str(x).strip(); s=re.sub(r"_at$","",s,flags=re.I); s=re.sub(r"\.\d+$","",s); return s.upper()
+
 def download_text(url,target):
     if target.exists() and target.stat().st_size>0:return target
-    target.parent.mkdir(parents=True,exist_ok=True); part=target.with_suffix(target.suffix+".part"); req=urllib.request.Request(url,headers={"User-Agent":"DataExploration-Dynamics/5.4"}); errors=[]
+    target.parent.mkdir(parents=True,exist_ok=True); part=target.with_suffix(target.suffix+".part"); req=urllib.request.Request(url,headers={"User-Agent":"DataExploration-Dynamics/5.5"}); errors=[]
     for label,context in (("verified",None),("unverified",ssl._create_unverified_context())):
         try:
             if part.exists():part.unlink()
@@ -154,127 +164,114 @@ def download_text(url,target):
             if part.stat().st_size==0:raise RuntimeError("empty response")
             part.replace(target); print(f"  downloaded {url} ({label} TLS)"); return target
         except Exception as exc:errors.append(f"{label}: {exc}")
-    if part.exists():part.unlink()
-    raise RuntimeError("; ".join(errors))
-
-def read_geo_platform(gpl):
-    cache=CACHE/f"{gpl}_full.txt"; url=f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={gpl}&targ=self&view=full&form=text"
-    try:download_text(url,cache)
-    except Exception as exc:print(f"  platform download failed for {gpl}: {exc}");return None
-    return cache.read_text(encoding="utf-8",errors="replace")
-
-def normalize_gene_symbol(x):
-    if x is None:return None
-    s=str(x).strip().strip('"').upper()
-    if not s or s in {"NA","N/A","NAN","NULL","-","NONE"}:return None
-    return re.sub(r"\s+","",s)
-
-def parse_platform_table(text):
-    if not text:return pd.DataFrame()
-    lines=text.splitlines(); begin=end=None
-    for i,line in enumerate(lines):
-        if line.startswith("!platform_table_begin"):begin=i+1
-        elif line.startswith("!platform_table_end"):end=i;break
-    if begin is None:return pd.DataFrame()
-    try:return pd.read_csv(StringIO("\n".join(lines[begin:end])),sep="\t",dtype=str,comment="#")
-    except Exception:return pd.DataFrame()
-
-def pick_column(df,candidates):
-    lower={str(c).strip().lower():c for c in df.columns}
-    for c in candidates:
-        if c.lower() in lower:return lower[c.lower()]
-    for c in df.columns:
-        if any(k in str(c).lower() for k in candidates):return c
-    return None
+    raise RuntimeError("download failed: "+"; ".join(errors))
 
 def fetch_platform_mapping(gpl):
-    table=parse_platform_table(read_geo_platform(gpl))
-    if table.empty:return pd.DataFrame(columns=["feature_id","gene_symbol"])
-    id_col=pick_column(table,["id","id_ref","probeid","probe_id","probename","array_address_id"]); gene_col=pick_column(table,["gene symbol","gene_symbol","genesymbol","gene_assignment","symbol","gene"])
-    if id_col is None or gene_col is None:print(f"  no usable ID/gene columns found for {gpl}; columns={list(table.columns)[:12]}");return pd.DataFrame(columns=["feature_id","gene_symbol"])
-    out=pd.DataFrame({"feature_id":table[id_col].astype(str),"gene_symbol":table[gene_col].map(normalize_gene_symbol)}).dropna(subset=["gene_symbol"]); return out[out.feature_id.str.strip().ne("")].drop_duplicates()
-
-def read_feature_matrix(path):
-    if not path.exists():return None
-    try:df=pd.read_csv(path,index_col=0,low_memory=False)
-    except Exception as exc:print(f"  cannot read {path}: {exc}");return None
-    x=df.apply(pd.to_numeric,errors="coerce"); x=x.loc[x.notna().sum(axis=1)>0]; x=x.loc[:,x.notna().sum(axis=0)>0]; return x.groupby(level=0).mean()
-
-def map_matrix_to_genes(expr,mapping,dataset):
-    m=mapping.copy(); expr=expr.copy(); m.feature_id=m.feature_id.astype(str).str.strip(); expr.index=expr.index.astype(str).str.strip(); merged=expr.reset_index(names="feature_id").merge(m,on="feature_id",how="left"); audit=merged[["feature_id","gene_symbol"]].copy(); audit["dataset"]=dataset; audit["mapped"]=audit.gene_symbol.notna(); mapped=merged.dropna(subset=["gene_symbol"]); sample_cols=[c for c in expr.columns if c in mapped.columns]; return mapped.groupby("gene_symbol")[sample_cols].mean(),audit
-
-def direct_gene_matrix(expr,dataset):
-    ids=pd.Series(expr.index.astype(str),index=expr.index); mapped=ids.map(normalize_gene_symbol); valid=mapped.notna()&mapped.str.match(r"^[A-Z0-9][A-Z0-9._-]*$",na=False); audit=pd.DataFrame({"feature_id":ids.values,"gene_symbol":mapped.values,"dataset":dataset,"mapped":valid.values}); gene=expr.loc[valid].copy(); gene.index=mapped[valid].values; return gene.groupby(level=0).mean(),audit
-
-def http_text(url,data=None,content_type="text/plain",timeout=180):
-    req=urllib.request.Request(url,data=data,headers={"Content-Type":content_type,"User-Agent":"DataExploration-Dynamics/5.4"},method="POST" if data is not None else "GET"); errors=[]
-    for label,context in (("verified",None),("unverified",ssl._create_unverified_context())):
-        try:
-            kw={"timeout":timeout};
-            if context is not None:kw["context"]=context
-            with urllib.request.urlopen(req,**kw) as r:return r.read().decode("utf-8",errors="replace")
-        except Exception as exc:errors.append(f"{label}: {exc}")
-    raise RuntimeError("; ".join(errors))
-
-def clean_refseq(x):
-    s=str(x).strip().strip('"')
-    s=re.split(r"[;|,\s]+",s)[0]
-    return re.sub(r"\.[0-9]+$","",s)
+    cache=CACHE/f"{gpl}_platform_mapping.tsv"
+    if cache.exists():return pd.read_csv(cache,sep="\t")
+    url=f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={gpl}&targ=self&view=full&form=text"; target=CACHE/f"{gpl}_platform.soft"
+    download_text(url,target); text=target.read_text(encoding="utf-8",errors="replace"); m=re.search(r"!platform_table_begin\n(.*?)\n!platform_table_end",text,re.S)
+    if not m:raise RuntimeError(f"no platform table found for {gpl}")
+    tab=pd.read_csv(StringIO(m.group(1)),sep="\t",dtype=str)
+    cols={c.lower().strip():c for c in tab.columns}; idcol=next((cols[k] for k in ("id","probe id","probeid") if k in cols),tab.columns[0]); sym=None
+    for k,c in cols.items():
+        if any(q in k for q in ("gene symbol","gene_symbol","symbol","gene assignment")):sym=c;break
+    if sym is None:raise RuntimeError(f"no gene-symbol column for {gpl}; columns={list(tab.columns)}")
+    out=pd.DataFrame({"feature":tab[idcol].astype(str),"human_gene":tab[sym].map(normalize_gene_symbol)}).dropna(subset=["human_gene"]).drop_duplicates("feature")
+    out.to_csv(cache,sep="\t",index=False); return out
 
 def biomart_refseq_to_human(accessions):
-    acc=sorted({clean_refseq(x) for x in accessions if re.match(r"^(?:NM|NR|XM|XR)_\d+$",clean_refseq(x))})
+    clean=sorted({clean_refseq(x) for x in accessions if re.match(r"^(NM|NR|XM|XR)_\d+$",clean_refseq(x))})
+    print(f"  BioMart RefSeq accessions to map: {len(clean)}")
     cache=CACHE/"GPL19972_refseq_to_human.tsv"
-    if cache.exists() and cache.stat().st_size>100:
-        try:
-            old=pd.read_csv(cache,sep="\t",dtype=str)
-            if not old.empty:return old
-        except Exception:pass
-    rows=[]; endpoint="https://www.ensembl.org/biomart/martservice"
-    print(f"  BioMart RefSeq accessions to map: {len(acc)}")
-    for start in range(0,len(acc),300):
-        batch=acc[start:start+300]
-        xml='''<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE Query>\n<Query virtualSchemaName="default" formatter="TSV" header="1" uniqueRows="1" count="0" datasetConfigVersion="0.6">\n<Dataset name="mmusculus_gene_ensembl" interface="default">\n<Filter name="refseq_mrna" value="%s"/>\n<Attribute name="refseq_mrna"/>\n<Attribute name="external_gene_name"/>\n<Attribute name="hsapiens_homolog_associated_gene_name"/>\n</Dataset>\n</Query>''' % ','.join(batch)
-        try:
-            text=http_text(endpoint,data=xml.encode(),content_type="application/xml",timeout=180)
-            if text.lstrip().startswith("Query ERROR"):raise RuntimeError(text[:500])
-            tab=pd.read_csv(StringIO(text),sep="\t",dtype=str)
-            if len(tab.columns)>=3:
-                tab=tab.iloc[:,:3]; tab.columns=["refseq_mrna","mouse_gene","human_gene"]; rows.append(tab)
-            print(f"  BioMart RefSeq mapping: {min(start+len(batch),len(acc))}/{len(acc)}")
-        except Exception as exc:print(f"  BioMart batch {start//300+1} failed: {exc}")
-    if not rows:return pd.DataFrame(columns=["refseq_mrna","mouse_gene","human_gene"])
-    out=pd.concat(rows,ignore_index=True).fillna(""); out.refseq_mrna=out.refseq_mrna.map(clean_refseq); out.mouse_gene=out.mouse_gene.map(normalize_gene_symbol); out.human_gene=out.human_gene.map(normalize_gene_symbol); out=out[(out.refseq_mrna!="")&out.human_gene.notna()].drop_duplicates(); out.to_csv(cache,sep="\t",index=False); return out
+    existing=pd.read_csv(cache,sep="\t",dtype=str) if cache.exists() else pd.DataFrame(columns=["refseq_mrna","mouse_gene","human_gene"])
+    existing=existing.fillna("")
+    done=set(existing.refseq_mrna.map(clean_refseq)) if not existing.empty else set()
+    todo=[x for x in clean if x not in done]
+    if not todo:return existing
+    endpoint="https://www.ensembl.org/biomart/martservice"
+    rows=[]
+    for start in range(0,len(todo),300):
+        batch=todo[start:start+300]
+        values="".join(f"<value>{x}</value>" for x in batch)
+        xml=f'''<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE Query><Query virtualSchemaName="default" formatter="TSV" header="0" uniqueRows="1" count="" datasetConfigVersion="0.6"><Dataset name="mmusculus_gene_ensembl" interface="default"><Filter name="refseq_mrna" value="{','.join(batch)}"/><Attribute name="refseq_mrna"/><Attribute name="external_gene_name"/><Attribute name="hsapiens_homolog_associated_gene_name"/></Dataset></Query>'''
+        success=False; errors=[]
+        for method,context in (("POST",None),("POST",ssl._create_unverified_context()),("GET",None),("GET",ssl._create_unverified_context())):
+            try:
+                if method=="POST":
+                    req=urllib.request.Request(endpoint,data=xml.encode("utf-8"),headers={"Content-Type":"application/xml","User-Agent":"DataExploration-Dynamics/5.5"},method="POST")
+                else:
+                    url=endpoint+"?"+urllib.parse.urlencode({"query":xml})
+                    req=urllib.request.Request(url,headers={"User-Agent":"DataExploration-Dynamics/5.5"},method="GET")
+                kw={"timeout":120};
+                if context is not None:kw["context"]=context
+                with urllib.request.urlopen(req,**kw) as r:txt=r.read().decode("utf-8",errors="replace")
+                if not txt.strip():raise RuntimeError("empty response")
+                for line in txt.splitlines():
+                    p=line.rstrip("\r").split("\t")
+                    if len(p)>=3 and p[0]:rows.append({"refseq_mrna":clean_refseq(p[0]),"mouse_gene":normalize_gene_symbol(p[1]) or "","human_gene":normalize_gene_symbol(p[2]) or ""})
+                success=True; print(f"  BioMart batch {start//300+1} succeeded via {method}{' unverified' if context is not None else ''}: {len(rows)} cumulative rows"); break
+            except Exception as exc:errors.append(f"{method}{' unverified' if context is not None else ''}: {exc}")
+        if not success:print(f"  BioMart batch {start//300+1} failed: {'; '.join(errors)}")
+    new=pd.DataFrame(rows,columns=["refseq_mrna","mouse_gene","human_gene"]); out=pd.concat([existing,new],ignore_index=True).drop_duplicates("refseq_mrna")
+    out.to_csv(cache,sep="\t",index=False); return out
 
-def stage2_6(state):
-    audit_rows=[]; matrices={}
+def map_matrix_to_human(df,mapping):
+    mp=dict(zip(mapping.feature.astype(str),mapping.human_gene)); rows=[]
+    for idx,row in df.iterrows():
+        g=normalize_gene_symbol(mp.get(str(idx)))
+        if g:rows.append((g,row.to_numpy(float)))
+    if not rows:return pd.DataFrame(index=[],columns=df.columns)
+    acc={}
+    for g,v in rows:acc.setdefault(g,[]).append(v)
+    return pd.DataFrame({g:np.mean(v,axis=0) for g,v in acc.items()},index=df.columns).T
+
+def direct_gene_matrix(df):
+    out={}
+    for idx,row in df.iterrows():
+        s=str(idx).strip(); g=normalize_gene_symbol(s)
+        if g and not re.match(r"^(NM|NR|XM|XR)_\d+(?:\.\d+)?(?:_AT)?$",s,re.I) and not re.match(r"^ENS[A-Z]*G\d+",s,re.I):out.setdefault(g,[]).append(row.to_numpy(float))
+    if not out:return pd.DataFrame(index=[],columns=df.columns)
+    return pd.DataFrame({g:np.mean(v,axis=0) for g,v in out.items()},index=df.columns).T
+
+def stage2_6():
+    print("\n"+"="*88); print("STAGE 2.6 — TIME-INDEPENDENT BIOLOGICAL GENE-LEVEL HARMONIZATION"); print("="*88)
+    matrices={}; audits=[]
     for ds,path in FEATURE_FILES.items():
-        expr=read_feature_matrix(path)
-        if expr is None:continue
+        if not path.exists():
+            audits.append({"dataset":ds,"feature_file":str(path),"n_features":0,"n_samples":0,"mapped_features":0,"mapped_genes":0,"status":"missing_feature_file"}); continue
+        df=read_feature_matrix(path); n_features,n_samples=df.shape
         if ds=="GSE67462":
-            # GPL19972 uses RefSeq-based Brainarray IDs such as NM_001001130.2_at.
-            # Map the RefSeq accession extracted directly from expression feature IDs;
-            # this avoids relying on an exact ID↔GB_ACC merge in the GEO annotation table.
-            refs=pd.Series(expr.index.astype(str)).str.extract(r"((?:NM|NR|XM|XR)_\d+(?:\.\d+)?)",expand=False)
-            bm=biomart_refseq_to_human(refs.dropna().tolist())
-            lookup=dict(zip(bm.refseq_mrna,bm.human_gene)); genes=refs.map(lambda x:lookup.get(clean_refseq(x)) if pd.notna(x) else None).to_numpy()
-            audit=pd.DataFrame({"feature_id":expr.index.astype(str),"refseq_mrna":refs.values,"gene_symbol":genes,"dataset":ds}); audit["mapped"]=audit.gene_symbol.notna(); gene=expr.loc[audit.mapped.values].copy(); gene.index=audit.loc[audit.mapped,"gene_symbol"].values; gene=gene.groupby(level=0).mean(); audit.to_csv(STAGE26/f"{ds}_feature_to_gene.csv",index=False); matrices[ds]=gene; audit_rows.append({"dataset":ds,"feature_file":str(path),"n_features":expr.shape[0],"n_samples":expr.shape[1],"mapped_features":int(audit.mapped.sum()),"mapped_genes":gene.shape[0],"status":"mapped_to_human_gene_space" if not gene.empty else "no_gene_mapping"}); continue
-        if ds in PLATFORMS:
-            gpl,_=PLATFORMS[ds]; mapping=fetch_platform_mapping(gpl); gene,audit=map_matrix_to_genes(expr,mapping,ds); audit.to_csv(STAGE26/f"{ds}_feature_to_gene.csv",index=False); matrices[ds]=gene; audit_rows.append({"dataset":ds,"feature_file":str(path),"n_features":expr.shape[0],"n_samples":expr.shape[1],"mapped_features":int(audit.mapped.sum()),"mapped_genes":gene.shape[0],"status":"mapped_to_human_gene_space" if not gene.empty else "no_gene_mapping"}); continue
-        gene,audit=direct_gene_matrix(expr,ds); audit.to_csv(STAGE26/f"{ds}_feature_to_gene.csv",index=False); matrices[ds]=gene; audit_rows.append({"dataset":ds,"feature_file":str(path),"n_features":expr.shape[0],"n_samples":expr.shape[1],"mapped_features":int(audit.mapped.sum()),"mapped_genes":gene.shape[0],"status":"direct_gene_ids" if not gene.empty else "no_gene_mapping"})
-    audit_df=pd.DataFrame(audit_rows); audit_df.to_csv(STAGE26/"01_gene_mapping_audit.csv",index=False); nonempty=[x for x in matrices.values() if x is not None and not x.empty]; genes=sorted(set.intersection(*(set(x.index) for x in nonempty))) if len(nonempty)==len(matrices) and matrices else []
-    overlap=[]; dslist=sorted(matrices)
-    for i,a in enumerate(dslist):
-        for b in dslist[i+1:]:overlap.append({"dataset_a":a,"dataset_b":b,"common_human_genes":len(set(matrices[a].index)&set(matrices[b].index))})
-    pd.DataFrame(overlap).to_csv(STAGE26/"05_pairwise_human_gene_overlap.csv",index=False)
-    if genes:
-        parts=[]
-        for ds in dslist:
-            x=matrices[ds].loc[genes].copy(); x=x.sub(x.mean(axis=1),axis=0).div(x.std(axis=1,ddof=0).replace(0,np.nan),axis=0).fillna(0); x.columns=[f"{ds}__{c}" for c in x.columns]; parts.append(x)
-        common=pd.concat(parts,axis=1); common.to_csv(STAGE26/"06_common_human_gene_matrix.csv"); meta=pd.DataFrame({"sample":common.columns}); meta["dataset"]=meta["sample"].str.split("__",n=1).str[0]; meta["original_sample"]=meta["sample"].str.split("__",n=1).str[1]; meta.to_csv(STAGE26/"07_common_gene_sample_metadata.csv",index=False)
-    status="success" if genes else "insufficient_common_human_gene_space"; pd.DataFrame([{"common_human_genes":len(genes),"n_datasets":len(matrices),"status":status,"time_used_for_feature_construction":False}]).to_csv(STAGE26/"08_stage26_decision.csv",index=False)
-    print("\n"+"="*88); print("STAGE 2.6 — TIME-INDEPENDENT BIOLOGICAL GENE-LEVEL HARMONIZATION"); print("="*88); print(audit_df.to_string(index=False)); print(f"\ncommon human genes across all contributing datasets = {len(genes)}"); print(f"datasets contributing = {len(matrices)}"); print(f"status = {status}"); print("NOTE: time is not used to construct the feature space. GPL19972 RefSeq IDs are extracted directly from expression feature IDs, version-normalized, and bulk-mapped through Ensembl BioMart to human ortholog symbols."); print("="*88+"\n"); return matrices,genes
+            refs=[clean_refseq(x) for x in df.index if re.match(r"^(NM|NR|XM|XR)_\d+(?:\.\d+)?_at$",str(x),re.I)]
+            bm=biomart_refseq_to_human(refs); mp=dict(zip(bm.refseq_mrna.map(clean_refseq),bm.human_gene)); rows=[]; mapped_features=0
+            for idx,row in df.iterrows():
+                r=clean_refseq(idx); g=normalize_gene_symbol(mp.get(r))
+                if g:mapped_features+=1; rows.append((g,row.to_numpy(float)))
+            acc={}
+            for g,v in rows:acc.setdefault(g,[]).append(v)
+            mat=pd.DataFrame({g:np.mean(v,axis=0) for g,v in acc.items()},index=df.columns).T if acc else pd.DataFrame(index=[],columns=df.columns)
+            matrices[ds]=mat; audits.append({"dataset":ds,"feature_file":str(path),"n_features":n_features,"n_samples":n_samples,"mapped_features":mapped_features,"mapped_genes":len(mat),"status":"mapped_mouse_refseq_to_human" if len(mat) else "no_gene_mapping"})
+        elif ds in ("GSE28688","GSE52052"):
+            try:mat=map_matrix_to_human(df,fetch_platform_mapping(PLATFORMS[ds][0])); matrices[ds]=mat; audits.append({"dataset":ds,"feature_file":str(path),"n_features":n_features,"n_samples":n_samples,"mapped_features":int((df.index.astype(str).isin(fetch_platform_mapping(PLATFORMS[ds][0]).feature)).sum()),"mapped_genes":len(mat),"status":"mapped_to_human_gene_space" if len(mat) else "no_gene_mapping"})
+            except Exception as exc:audits.append({"dataset":ds,"feature_file":str(path),"n_features":n_features,"n_samples":n_samples,"mapped_features":0,"mapped_genes":0,"status":f"mapping_error: {exc}"})
+        else:
+            mat=direct_gene_matrix(df); matrices[ds]=mat; audits.append({"dataset":ds,"feature_file":str(path),"n_features":n_features,"n_samples":n_samples,"mapped_features":len(mat),"mapped_genes":len(mat),"status":"direct_gene_ids" if len(mat) else "no_gene_mapping"})
+    audit=pd.DataFrame(audits); audit.to_csv(STAGE26/"01_gene_mapping_audit.csv",index=False); print(audit.to_string(index=False))
+    contributing=[d for d,m in matrices.items() if len(m)>0]
+    common=set.intersection(*(set(m.index) for m in matrices.values() if len(m)>0)) if matrices else set()
+    print(f"\ncommon human genes across all contributing datasets = {len(common)}"); print(f"datasets contributing = {len(contributing)}")
+    if common:
+        genes=sorted(common); blocks=[]; meta=[]
+        for ds in contributing:
+            m=matrices[ds].loc[genes].copy(); m=m.apply(lambda x:zscore(x).to_numpy(),axis=1,result_type="expand"); m.index=genes; m.columns=FEATURE_FILES[ds].name+"__"+m.columns.astype(str); blocks.append(m); meta.extend({"dataset":ds,"sample":c} for c in m.columns)
+        common_matrix=pd.concat(blocks,axis=1); common_matrix.to_csv(STAGE26/"06_common_human_gene_matrix.csv")
+        pd.DataFrame(meta).to_csv(STAGE26/"07_common_gene_sample_metadata.csv",index=False)
+    status="sufficient_common_human_gene_space" if len(common)>=1000 else "insufficient_common_human_gene_space"
+    pd.DataFrame([{"common_human_genes":len(common),"datasets_contributing":len(contributing),"status":status,"time_used_for_feature_space":False}]).to_csv(STAGE26/"08_stage26_decision.csv",index=False)
+    print(f"status = {status}"); print("NOTE: time is not used to construct the feature space. GSE67462 GPL19972 IDs are parsed as RefSeq accessions and bulk-mapped to human ortholog gene symbols through Ensembl BioMart."); print("="*88)
+    return common
 
 def main():
-    state,availability=stage1_data_integration(); aligned=stage2_1(state); stage2_2(aligned); oos=stage2_4(aligned); matrices,genes=stage2_6(aligned); print(f"Dynamics v5.4 results written to: {OUT}"); print(f"Datasets with PCA: {availability.PCA_file_found.sum()}/{len(availability)}"); print(f"Stage 2.1 aligned trajectory datasets: {aligned.common_latent_status.eq('time_anchored_aligned').groupby(aligned.dataset).any().sum()}"); print(f"Stage 2.4 tested OOS rows: {len(oos)}"); print(f"Stage 2.6 common human genes: {len(genes)}")
+    state,availability=stage1_data_integration(); aligned=stage2_1(state); stage2_2(aligned); oos=stage2_4(state); common=stage2_6(); print(f"\nDynamics v5.5 results written to: {OUT}"); print(f"Datasets with PCA: {availability.PCA_file_found.sum() if not availability.empty else 0}/5"); print(f"Stage 2.1 aligned trajectory datasets: {aligned.loc[aligned.common_latent_status=='time_anchored_aligned','dataset'].nunique() if not aligned.empty else 0}"); print(f"Stage 2.4 tested OOS rows: {len(oos)}"); print(f"Stage 2.6 common human genes: {len(common)}")
 
 if __name__=="__main__":main()
