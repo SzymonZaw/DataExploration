@@ -1,14 +1,7 @@
 """Dynamics v5.0 — biological gene-level harmonization for OSKM dynamics.
 
 The PCA/Procrustes stages are retained as an experimental trajectory baseline.
-Stage 2.6 is the first time-independent biological feature layer:
-
-    probe/feature IDs -> gene symbols -> human gene space
-    mouse genes -> human orthologues
-    scRNA-seq cells -> sample pseudobulk (already produced by GSE297234.py)
-
-The stage never uses time to construct the feature space and never treats
-cross-study PCA alignment as biological equivalence.
+Stage 2.6 is the first time-independent biological feature layer.
 """
 from pathlib import Path
 import gzip
@@ -78,12 +71,10 @@ GSE28688_ROW_TIME = [0., 0., 24., 24., 48., 48., 72., 72., np.nan, np.nan, np.na
 
 
 def load_pca(path):
-    if not path.exists():
-        return None
+    if not path.exists(): return None
     df = pd.read_csv(path, index_col=0)
     pcs = [c for c in ("PC1", "PC2", "PC3") if c in df.columns]
-    if len(pcs) < 3:
-        return None
+    if len(pcs) < 3: return None
     x = df[pcs].apply(pd.to_numeric, errors="coerce")
     x.index = x.index.astype(str)
     return x
@@ -91,22 +82,17 @@ def load_pca(path):
 
 def time_hours(ds, sample):
     s = str(sample).strip().strip('"')
-    if s in GSM_TIME:
-        return GSM_TIME[s]
+    if s in GSM_TIME: return GSM_TIME[s]
     t = s.lower().replace("_", " ").replace("-", " ")
     patterns = {
         "GSE28688": [(r"24\s*h", 24.), (r"48\s*h", 48.), (r"72\s*h", 72.)],
         "GSE148158": [(r"48", 48.), (r"72", 72.)],
         "GSE52052": [(r"day\s*11", 264.)],
-        "GSE67462": [(r"day\s*0\b", 0.), (r"day\s*1\b", 24.), (r"day\s*3\b", 72.),
-                     (r"day\s*5\b", 120.), (r"day\s*7\b", 168.), (r"day\s*11\b", 264.),
-                     (r"day\s*15\b", 360.), (r"day\s*18\b", 432.)],
-        "GSE297234": [(r"d0\b|day\s*0\b", 0.), (r"d3\b|day\s*3\b", 72.),
-                      (r"d7\b|day\s*7\b", 168.), (r"d10\b|day\s*10\b", 240.)],
+        "GSE67462": [(r"day\s*0\b", 0.), (r"day\s*1\b", 24.), (r"day\s*3\b", 72.), (r"day\s*5\b", 120.), (r"day\s*7\b", 168.), (r"day\s*11\b", 264.), (r"day\s*15\b", 360.), (r"day\s*18\b", 432.)],
+        "GSE297234": [(r"d0\b|day\s*0\b", 0.), (r"d3\b|day\s*3\b", 72.), (r"d7\b|day\s*7\b", 168.), (r"d10\b|day\s*10\b", 240.)],
     }
     for pattern, value in patterns.get(ds, []):
-        if re.search(pattern, t):
-            return value
+        if re.search(pattern, t): return value
     return np.nan
 
 
@@ -156,12 +142,10 @@ def stage1_data_integration():
         if x is None:
             rows.append({"dataset": ds, "PCA_file_found": False, "n_samples": 0, "n_timed_samples": 0, "n_unique_times": 0, "role": "unavailable", "path": str(path)})
             continue
-        o = x.copy()
-        o.insert(0, "sample", o.index.astype(str))
+        o = x.copy(); o.insert(0, "sample", o.index.astype(str))
         source = "GSM_or_text"
         if ds == "GSE28688" and len(o) == 14:
-            o["sample"] = GSE28688_ROW_SAMPLE
-            source = "GSE28688_GEO_row_order"
+            o["sample"] = GSE28688_ROW_SAMPLE; source = "GSE28688_GEO_row_order"
         o["dataset"] = ds
         o["time_hours"] = [time_hours(ds, s) for s in o["sample"]]
         if ds == "GSE28688" and source == "GSE28688_GEO_row_order": o["time_hours"] = GSE28688_ROW_TIME
@@ -185,8 +169,7 @@ def curve(state, ds, grid, branch=None, exclude_time=None):
     if exclude_time is not None: g = g[g.time_hours != exclude_time]
     m = g.groupby("time_hours")[["latent_1", "latent_2", "latent_3"]].mean().sort_index()
     if len(m) < 2: return None
-    t = m.index.to_numpy(float)
-    u = (t - t.min()) / (t.max() - t.min())
+    t = m.index.to_numpy(float); u = (t - t.min()) / (t.max() - t.min())
     return np.column_stack([np.interp(grid, u, m[c]) for c in ("latent_1", "latent_2", "latent_3")])
 
 
@@ -205,133 +188,98 @@ def fit_transform(source, target):
 
 def apply_transform(x, tr):
     rot, sm, scale, tm = tr
-    y = (x - sm) @ rot
-    y *= scale
+    y = (x - sm) @ rot; y *= scale
     return y + tm
 
 
 def stage2_1(state):
     datasets = [d for d in state.dataset.unique() if state[(state.dataset == d) & state.time_hours.notna()].time_hours.nunique() >= 2]
     grid = np.linspace(0, 1, 25)
-    curves = {d: curve(state, d, grid) for d in datasets}
-    curves = {d: c for d, c in curves.items() if c is not None and np.isfinite(c).all()}
+    curves = {d: curve(state, d, grid) for d in datasets}; curves = {d:c for d,c in curves.items() if c is not None and np.isfinite(c).all()}
     ref = "GSE67462" if "GSE67462" in curves else sorted(curves)[0]
     aligned = {ref: curves[ref]}
-    for d, c in curves.items():
+    for d,c in curves.items():
         if d != ref: aligned[d] = apply_transform(c, fit_transform(c, curves[ref]))
     out = state.copy()
-    for j in range(1, 4): out[f"common_latent_{j}"] = np.nan
+    for j in range(1,4): out[f"common_latent_{j}"] = np.nan
     out["common_latent_status"] = "not_aligned"
-    for d, a in aligned.items():
-        idx = out.index[(out.dataset == d) & out.time_hours.notna()]
-        lo, hi = out.loc[idx, "time_hours"].min(), out.loc[idx, "time_hours"].max()
-        u = (out.loc[idx, "time_hours"].to_numpy() - lo) / (hi - lo)
-        for j in range(3): out.loc[idx, f"common_latent_{j+1}"] = np.interp(u, grid, a[:, j])
-        out.loc[idx, "common_latent_status"] = "time_anchored_aligned"
-    out.to_csv(STAGE21 / "04_sample_common_latent_state.csv", index=False)
+    for d,a in aligned.items():
+        idx = out.index[(out.dataset==d)&out.time_hours.notna()]
+        lo,hi = out.loc[idx,"time_hours"].min(),out.loc[idx,"time_hours"].max()
+        u=(out.loc[idx,"time_hours"].to_numpy()-lo)/(hi-lo)
+        for j in range(3): out.loc[idx,f"common_latent_{j+1}"]=np.interp(u,grid,a[:,j])
+        out.loc[idx,"common_latent_status"]="time_anchored_aligned"
+    out.to_csv(STAGE21/"04_sample_common_latent_state.csv",index=False)
     return out
 
 
 def stage2_2(state):
-    datasets = sorted(state.loc[state.common_latent_status == "time_anchored_aligned", "dataset"].unique())
-    grid = np.linspace(0, 1, 25)
-    curves = {d: curve(state, d, grid) for d in datasets}
-    rows = []
-    for i, a in enumerate(datasets):
+    datasets=sorted(state.loc[state.common_latent_status=="time_anchored_aligned","dataset"].unique()); grid=np.linspace(0,1,25)
+    curves={d:curve(state,d,grid) for d in datasets}; rows=[]
+    for i,a in enumerate(datasets):
         for b in datasets[i+1:]:
-            x, y = curves[a], curves[b]
-            rows.append({"dataset_a": a, "dataset_b": b, "trajectory_correlation": np.corrcoef(x.ravel(), y.ravel())[0,1], "aligned_rmse": np.sqrt(np.mean((x-y)**2)), "path_length_a": np.linalg.norm(np.diff(x,axis=0),axis=1).sum(), "path_length_b": np.linalg.norm(np.diff(y,axis=0),axis=1).sum()})
-    df = pd.DataFrame(rows)
-    if not df.empty: df["path_length_ratio"] = df.path_length_a / df.path_length_b
-    df.to_csv(STAGE22 / "02_cross_dataset_distances.csv", index=False)
-    return df
+            x,y=curves[a],curves[b]
+            rows.append({"dataset_a":a,"dataset_b":b,"trajectory_correlation":np.corrcoef(x.ravel(),y.ravel())[0,1],"aligned_rmse":np.sqrt(np.mean((x-y)**2)),"path_length_a":np.linalg.norm(np.diff(x,axis=0),axis=1).sum(),"path_length_b":np.linalg.norm(np.diff(y,axis=0),axis=1).sum()})
+    df=pd.DataFrame(rows)
+    if not df.empty: df["path_length_ratio"]=df.path_length_a/df.path_length_b
+    df.to_csv(STAGE22/"02_cross_dataset_distances.csv",index=False); return df
 
 
 def branches(state):
-    result = []
+    result=[]
     for ds in state.dataset.unique():
-        g = state[(state.dataset == ds) & state.time_hours.notna()]
-        if g.time_hours.nunique() < 2: continue
-        valid = []
+        g=state[(state.dataset==ds)&state.time_hours.notna()]
+        if g.time_hours.nunique()<2: continue
+        valid=[]
         for c in sorted(g.condition.unique()):
-            if curve(state, ds, np.linspace(0,1,25), None if c == "all" else c) is not None: valid.append(c)
-        if ds == "GSE148158" and len(valid) >= 2: result.extend((ds,c) for c in valid)
+            if curve(state,ds,np.linspace(0,1,25),None if c=="all" else c) is not None: valid.append(c)
+        if ds=="GSE148158" and len(valid)>=2: result.extend((ds,c) for c in valid)
         else: result.append((ds,"all"))
     return result
 
 
-def stage2_3(state):
-    ref = curve(state, "GSE67462", np.linspace(0,1,25))
-    out = state.copy()
-    for c in ("aligned_sample_latent_1", "aligned_sample_latent_2", "aligned_sample_latent_3"): out[c] = np.nan
-    out["within_time_residual_norm"] = np.nan
-    out["trajectory_branch"] = "unassigned"
-    summaries = []
-    for ds, branch in branches(state):
-        c = curve(state, ds, np.linspace(0,1,25), None if branch == "all" else branch)
-        if c is None: continue
-        tr = fit_transform(c, ref)
-        mask = (out.dataset == ds) & out.time_hours.notna() & ((out.condition == branch) if branch != "all" else True)
-        idx = out.index[mask]
-        xa = apply_transform(out.loc[idx, ["latent_1","latent_2","latent_3"]].to_numpy(float), tr)
-        out.loc[idx, ["aligned_sample_latent_1","aligned_sample_latent_2","aligned_sample_latent_3"]] = xa
-        out.loc[idx, "trajectory_branch"] = branch
-        tmp = pd.DataFrame(xa, index=idx)
-        means = tmp.groupby(out.loc[idx,"time_hours"]).transform("mean").to_numpy()
-        out.loc[idx,"within_time_residual_norm"] = np.linalg.norm(xa-means,axis=1)
-        summaries.append({"dataset":ds,"trajectory_branch":branch,"n_samples":len(idx),"n_times":out.loc[idx,"time_hours"].nunique(),"mean_within_time_residual_norm":np.nanmean(out.loc[idx,"within_time_residual_norm"]),"median_within_time_residual_norm":np.nanmedian(out.loc[idx,"within_time_residual_norm"]),"p95_within_time_residual_norm":np.nanquantile(out.loc[idx,"within_time_residual_norm"],.95)})
-    out.to_csv(STAGE23 / "03_sample_level_aligned_states.csv", index=False)
-    pd.DataFrame(summaries).to_csv(STAGE23 / "01_within_time_residual_summary.csv", index=False)
-    return out
-
-
 def stage2_4(state):
-    rows=[]
-    grid=np.linspace(0,1,25)
-    ref="GSE67462"
+    rows=[]; grid=np.linspace(0,1,25); ref="GSE67462"
     for ds,branch in branches(state):
         g=state[(state.dataset==ds)&state.time_hours.notna()&((state.condition==branch) if branch!="all" else True)]
         times=sorted(g.time_hours.unique())
         if len(times)<3: continue
         lo,hi=min(times),max(times)
+        ref_curve=curve(state,ref,grid)
+        if ref_curve is None: continue
         for held in times:
             train=[t for t in times if t!=held]
             if len(train)<2: continue
-            target_train=curve(state,ds,np.array([]),None if branch=="all" else branch)
-            if target_train is None: continue
-            # Build target curve using the full biological time range [lo,hi], but only training observations.
             m=g[g.time_hours.isin(train)].groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
-            tu=(m.index.to_numpy(float)-lo)/(hi-lo)
             if len(m)<2: continue
+            tu=(m.index.to_numpy(float)-lo)/(hi-lo)
             target=np.column_stack([np.interp(grid,tu,m[c]) for c in ("latent_1","latent_2","latent_3")])
-            ref_curve=curve(state,ref,grid)
             tr=fit_transform(target,ref_curve)
             hu=(held-lo)/(hi-lo)
-            pred=np.array([np.interp(hu,grid,trg) for trg in tr[3]]) if False else _interp_curve(tr[0] if False else None,0)
-            # Predict in source coordinates, then align the held-out observed point.
             src_pred=np.array([np.interp(hu,grid,target[:,j]) for j in range(3)])
             pred_common=apply_transform(src_pred.reshape(1,-1),tr)[0]
             observed=g[g.time_hours==held][["latent_1","latent_2","latent_3"]].mean().to_numpy(float)
             observed_common=apply_transform(observed.reshape(1,-1),tr)[0]
+            ref_pred=np.array([np.interp(hu,grid,ref_curve[:,j]) for j in range(3)])
             err=float(np.linalg.norm(pred_common-observed_common))
-            naive=float(np.linalg.norm(observed_common-np.interp(hu,grid,ref_curve)))
+            naive=float(np.linalg.norm(observed_common-ref_pred))
             rows.append({"dataset":ds,"trajectory_branch":branch,"held_out_time_hours":held,"n_train_times":len(train),"oos_error":err,"naive_error":naive,"error_reduction_vs_naive":naive-err,"relative_error":err/(naive+1e-12)})
     df=pd.DataFrame(rows)
     df.to_csv(STAGE24/"01_leave_one_timepoint_out.csv",index=False)
     if not df.empty:
-        df.groupby(["dataset","trajectory_branch"]).agg(n_tests=("oos_error","size"),mean_oos_error=("oos_error","mean"),median_oos_error=("oos_error","median"),p95_oos_error=("oos_error",lambda x:x.quantile(.95)),mean_relative_error=("relative_error","mean"),mean_error_reduction_vs_naive=("error_reduction_vs_naive","mean")).reset_index().to_csv(STAGE24/"02_oos_summary_by_trajectory.csv",index=False)
+        summary=df.groupby(["dataset","trajectory_branch"]).agg(n_tests=("oos_error","size"),mean_oos_error=("oos_error","mean"),median_oos_error=("oos_error","median"),p95_oos_error=("oos_error",lambda x:x.quantile(.95)),mean_relative_error=("relative_error","mean"),mean_error_reduction_vs_naive=("error_reduction_vs_naive","mean")).reset_index()
+        summary.to_csv(STAGE24/"02_oos_summary_by_trajectory.csv",index=False)
         df.to_csv(STAGE24/"03_oos_vs_naive_baseline.csv",index=False)
     return df
 
 
-def _interp_curve(dummy, x):
-    return np.nan
+def _interp_curve(dummy,x): return np.nan
 
 
-def download_text(url, target):
-    if target.exists() and target.stat().st_size > 0: return target
+def download_text(url,target):
+    if target.exists() and target.stat().st_size>0: return target
     req=urllib.request.Request(url,headers={"User-Agent":"DataExploration-Dynamics/5.0"})
-    with urllib.request.urlopen(req,timeout=120) as r, open(target,"wb") as f:
+    with urllib.request.urlopen(req,timeout=120) as r,open(target,"wb") as f:
         while True:
             chunk=r.read(1024*1024)
             if not chunk: break
@@ -342,302 +290,185 @@ def download_text(url, target):
 def read_geo_platform(gpl):
     cache=CACHE/f"{gpl}_full.txt"
     url=f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={gpl}&targ=self&view=full&form=text"
-    try:
-        download_text(url,cache)
+    try: download_text(url,cache)
     except Exception as exc:
-        print(f"  platform download failed for {gpl}: {exc}")
-        return None
+        print(f"  platform download failed for {gpl}: {exc}"); return None
     text=cache.read_text(encoding="utf-8",errors="replace")
-    start=text.find("!platform_table_begin")
-    end=text.find("!platform_table_end")
-    if start<0 or end<0: return None
-    block=text[start+len("!platform_table_begin"):end].strip("\n\r")
-    from io import StringIO
-    try:
-        return pd.read_csv(StringIO(block),sep="\t",dtype=str,low_memory=False)
-    except Exception:
-        return None
+    return text
 
 
-def find_annotation_columns(df):
-    cols={str(c).strip().lower():c for c in df.columns}
-    id_col=cols.get("id") or cols.get("probe_id") or cols.get("probeid") or cols.get("id_ref")
-    gene_candidates=["gene_symbol","gene symbol","gene_symbol(s)","symbol","gene symbol(s)","gene_symbol_id","gene_assignment","gene_assignment_info","gene"]
-    gene_col=next((cols[k] for k in gene_candidates if k in cols),None)
-    if gene_col is None:
-        for k,c in cols.items():
-            if "gene" in k and ("symbol" in k or "assignment" in k): gene_col=c; break
-    return id_col,gene_col
+def normalize_gene_symbol(x):
+    if x is None: return None
+    s=str(x).strip().strip('"').upper()
+    if not s or s in {"NA","N/A","NAN","NULL","-","NONE"}: return None
+    s=re.sub(r"\s+","",s)
+    return s
 
 
-def split_symbols(value):
-    if pd.isna(value): return []
-    s=str(value).strip()
-    if not s or s.lower() in {"nan","na","none","---","-"}: return []
-    s=re.sub(r"\[[^\]]*\]", " ", s)
-    parts=re.split(r"///|//|;|,|\|",s)
-    out=[]
-    for p in parts:
-        p=p.strip()
-        if not p: continue
-        # Common GEO assignment forms: "1234 // SYMBOL // ..."
-        m=re.search(r"\b([A-Za-z][A-Za-z0-9.-]{1,})\b",p)
-        if m: out.append(m.group(1))
-    return out
+def parse_platform_table(text):
+    if not text: return pd.DataFrame()
+    lines=text.splitlines(); begin=None; end=None
+    for i,line in enumerate(lines):
+        if line.startswith("!platform_table_begin"): begin=i+1
+        elif line.startswith("!platform_table_end"):
+            end=i; break
+    if begin is None: return pd.DataFrame()
+    raw="\n".join(lines[begin:end])
+    try: return pd.read_csv(pd.io.common.StringIO(raw),sep="\t",dtype=str,comment="#")
+    except Exception: return pd.DataFrame()
 
 
-def normalize_human_id(x):
-    s=str(x).strip().strip('"')
-    if not s or s.lower() in {"nan","na","none"}: return None
-    s=re.sub(r"\.\d+$", "", s)
-    if s.upper().startswith("ENSG"): return s.upper()
-    # Gene symbols are kept in uppercase for cross-platform matching.
-    if re.fullmatch(r"[A-Za-z][A-Za-z0-9.-]*",s): return s.upper()
+def pick_column(df,candidates):
+    lower={str(c).strip().lower():c for c in df.columns}
+    for c in candidates:
+        if c.lower() in lower: return lower[c.lower()]
+    for c in df.columns:
+        lc=str(c).lower()
+        if any(k in lc for k in candidates): return c
     return None
 
 
-def map_platform_features(ds, matrix):
-    gpl,_=PLATFORMS[ds]
-    ann=None
-    local=RESULTS/"GSE28688"/"RAW_archive"/"BGX_annotation_sample.csv"
-    if ds=="GSE28688" and local.exists():
-        try: ann=pd.read_csv(local,dtype=str,low_memory=False)
-        except Exception: ann=None
-    if ann is None: ann=read_geo_platform(gpl)
-    if ann is None: return pd.DataFrame(columns=["feature_id","gene_symbol"]),"annotation_unavailable"
-    id_col,gene_col=find_annotation_columns(ann)
-    if id_col is None or gene_col is None: return pd.DataFrame(columns=["feature_id","gene_symbol"]),f"annotation_columns_not_found:{list(ann.columns)[:12]}"
-    pairs=[]
-    lookup={str(k).strip():v for k,v in zip(ann[id_col],ann[gene_col])}
-    for feature in matrix.index:
-        vals=split_symbols(lookup.get(str(feature).strip(),""))
-        for v in vals:
-            sym=normalize_human_id(v)
-            if sym: pairs.append((str(feature),sym))
-    return pd.DataFrame(pairs,columns=["feature_id","gene_symbol"]).drop_duplicates(),"GEO_platform_annotation"
+def fetch_platform_mapping(gpl):
+    text=read_geo_platform(gpl)
+    table=parse_platform_table(text)
+    if table.empty: return pd.DataFrame(columns=["feature_id","gene_symbol"])
+    id_col=pick_column(table,["id","id_ref","probeid","probe_id","probename","array_address_id"])
+    gene_col=pick_column(table,["gene symbol","gene_symbol","genesymbol","gene_assignment","symbol","gene"])
+    if id_col is None or gene_col is None:
+        return pd.DataFrame(columns=["feature_id","gene_symbol"])
+    out=pd.DataFrame({"feature_id":table[id_col].astype(str),"gene_symbol":table[gene_col].map(normalize_gene_symbol)})
+    out=out.dropna(subset=["gene_symbol"])
+    out=out[out.feature_id.str.strip().ne("")]
+    return out.drop_duplicates()
 
 
-def normalize_human_matrix(matrix):
-    rows=[]
-    for feature in matrix.index:
-        sym=normalize_human_id(feature)
-        if sym: rows.append((str(feature),sym))
-    return pd.DataFrame(rows,columns=["feature_id","gene_symbol"]).drop_duplicates(),"direct_gene_or_ensembl_id"
-
-
-def biomart_query(xml_text, cache_name):
-    target=CACHE/cache_name
-    if target.exists() and target.stat().st_size>0:
-        return target.read_text(encoding="utf-8",errors="replace")
-    url="https://www.ensembl.org/biomart/martservice?"+urllib.parse.urlencode({"query":xml_text})
+def read_feature_matrix(path):
+    if not path.exists(): return None
     try:
-        data=urllib.request.urlopen(urllib.request.Request(url,headers={"User-Agent":"DataExploration-Dynamics/5.0"}),timeout=180).read().decode("utf-8",errors="replace")
-        target.write_text(data,encoding="utf-8")
-        return data
+        df=pd.read_csv(path,index_col=0,low_memory=False)
     except Exception as exc:
-        print(f"  BioMart query failed: {exc}")
-        return None
+        print(f"  cannot read {path}: {exc}"); return None
+    x=df.apply(pd.to_numeric,errors="coerce")
+    x=x.loc[x.notna().sum(axis=1)>0]
+    x=x.loc[:,x.notna().sum(axis=0)>0]
+    return x.groupby(level=0).mean()
 
 
-def mouse_human_orthologs():
-    xml='''<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE Query><Query virtualSchemaName="default" formatter="TSV" header="1" uniqueRows="1" count="" datasetConfigVersion="0.6"><Dataset name="mmusculus_gene_ensembl" interface="default"><Attribute name="ensembl_gene_id"/><Attribute name="external_gene_name"/><Attribute name="hsapiens_homolog_ensembl_gene"/><Attribute name="hsapiens_homolog_associated_gene_name"/><Attribute name="hsapiens_homolog_orthology_type"/><Attribute name="hsapiens_homolog_orthology_confidence"/></Dataset></Query>'''
-    text=biomart_query(xml,"mouse_human_orthologs.tsv")
-    if not text: return pd.DataFrame()
-    from io import StringIO
-    try:
-        df=pd.read_csv(StringIO(text),sep="\t",dtype=str)
-    except Exception: return pd.DataFrame()
-    df.columns=[str(c).strip() for c in df.columns]
-    return df
+def map_matrix_to_genes(expr,mapping,dataset):
+    if expr is None: return None,pd.DataFrame()
+    m=mapping.copy(); m["feature_id"]=m.feature_id.astype(str).str.strip()
+    idx=expr.index.astype(str).str.strip(); expr=expr.copy(); expr.index=idx
+    merged=expr.reset_index(names="feature_id").merge(m,on="feature_id",how="left")
+    audit=merged[["feature_id","gene_symbol"]].copy()
+    audit["dataset"]=dataset
+    audit["mapped"]=audit.gene_symbol.notna()
+    mapped=merged.dropna(subset=["gene_symbol"]).copy()
+    sample_cols=[c for c in expr.columns if c in mapped.columns]
+    gene=mapped.groupby("gene_symbol")[sample_cols].mean()
+    return gene,audit
 
 
-def stage2_6_biological_harmonization():
-    print("\n"+"="*88)
-    print("STAGE 2.6 — TIME-INDEPENDENT BIOLOGICAL GENE-LEVEL HARMONIZATION")
-    print("="*88)
-    audits=[]; mappings={}; matrices={}
-    for ds,path in FEATURE_FILES.items():
-        if not path.exists():
-            audits.append({"dataset":ds,"source_path":str(path),"status":"missing_matrix","n_features":0,"n_mapped_features":0,"n_unique_genes":0,"mapping_method":"none"}); continue
-        try:
-            matrix=pd.read_csv(path,index_col=0,low_memory=False)
-            matrix=matrix.apply(pd.to_numeric,errors="coerce")
-            matrix=matrix.dropna(axis=0,how="all").dropna(axis=1,how="all")
-        except Exception as exc:
-            audits.append({"dataset":ds,"source_path":str(path),"status":f"read_error:{exc}","n_features":0,"n_mapped_features":0,"n_unique_genes":0,"mapping_method":"none"}); continue
-        matrices[ds]=matrix
-        if ds in PLATFORMS: mp,method=map_platform_features(ds,matrix)
-        else: mp,method=normalize_human_matrix(matrix)
-        mappings[ds]=mp
-        audits.append({"dataset":ds,"source_path":str(path),"status":"mapped" if not mp.empty else "no_features_mapped","n_features":matrix.shape[0],"n_samples":matrix.shape[1],"n_mapped_features":mp.feature_id.nunique() if not mp.empty else 0,"n_unique_genes":mp.gene_symbol.nunique() if not mp.empty else 0,"mapping_method":method})
-        if not mp.empty: mp.to_csv(STAGE26/f"{ds}_feature_to_gene.csv",index=False)
-    audit=pd.DataFrame(audits)
-    audit.to_csv(STAGE26/"01_gene_mapping_audit.csv",index=False)
-
-    mouse_map=mouse_human_orthologs()
-    if not mouse_map.empty:
-        mouse_map.to_csv(STAGE26/"02_mouse_human_ortholog_map.csv",index=False)
-        for ds in ("GSE67462",):
-            if ds not in mappings: continue
-            mp=mappings[ds].copy()
-            mm=mouse_map.copy()
-            mm["mouse_symbol_norm"]=mm["external_gene_name"].map(normalize_human_id)
-            mm["human_symbol_norm"]=mm["hsapiens_homolog_associated_gene_name"].map(normalize_human_id)
-            mm=mm[(mm.mouse_symbol_norm.notna())&(mm.human_symbol_norm.notna())]
-            # Prefer one-to-one orthologues when several records exist.
-            mm["one_to_one"]=(mm["hsapiens_homolog_orthology_type"].astype(str).str.contains("ortholog_one2one",case=False,na=False))
-            mm=mm.sort_values(["mouse_symbol_norm","one_to_one"],ascending=[True,False]).drop_duplicates("mouse_symbol_norm")
-            mp=mp.merge(mm[["mouse_symbol_norm","human_symbol_norm","hsapiens_homolog_orthology_type","hsapiens_homolog_orthology_confidence"]],left_on="gene_symbol",right_on="mouse_symbol_norm",how="left")
-            mp["human_gene_symbol"]=mp["human_symbol_norm"]
-            mappings[ds]=mp
-            mp.to_csv(STAGE26/"GSE67462_feature_to_human_gene.csv",index=False)
-            audit.loc[audit.dataset==ds,"n_mapped_to_human_genes"]=mp.human_gene_symbol.notna().sum()
-            audit.loc[audit.dataset==ds,"orthology_method"]="Ensembl BioMart Compara"
-    else:
-        audit["orthology_method"]="not_available"
-
-    gene_mats={}
-    for ds,matrix in matrices.items():
-        mp=mappings.get(ds,pd.DataFrame())
-        if mp.empty: continue
-        target_col="human_gene_symbol" if ds=="GSE67462" and "human_gene_symbol" in mp.columns else "gene_symbol"
-        mp=mp[mp[target_col].notna()].copy()
-        mp[target_col]=mp[target_col].map(normalize_human_id)
-        mp=mp[mp[target_col].notna()]
-        if mp.empty: continue
-        sample_cols=[c for c in matrix.columns if c not in {"gene_symbol","feature_id"}]
-        pieces=[]
-        for gene,grp in mp.groupby(target_col):
-            feats=[f for f in grp.feature_id.unique() if f in matrix.index]
-            if not feats: continue
-            v=matrix.loc[feats,sample_cols].mean(axis=0)
-            v.name=gene; pieces.append(v)
-        if pieces:
-            gm=pd.DataFrame(pieces)
-            gm=gm.groupby(level=0).mean()
-            # Within-dataset gene standardization removes platform-scale differences while retaining sample ordering.
-            gm=gm.sub(gm.mean(axis=1),axis=0).div(gm.std(axis=1,ddof=0).replace(0,np.nan),axis=0)
-            gm=gm.dropna(how="all")
-            gene_mats[ds]=gm
-            gm.to_csv(STAGE26/f"{ds}_human_gene_zmatrix.csv")
-
-    if len(gene_mats)>=2:
-        common=set.intersection(*(set(x.index) for x in gene_mats.values()))
-    else: common=set()
-    common=sorted(common)
-    if common:
-        blocks=[]
-        meta=[]
-        for ds in sorted(gene_mats):
-            x=gene_mats[ds].loc[common]
-            blocks.append(x)
-            for sample in x.columns: meta.append({"sample":str(sample),"dataset":ds,"feature_space":"human_gene_zscore","time_hours":time_hours(ds,sample),"condition":condition(ds,sample)})
-        common_matrix=pd.concat(blocks,axis=1)
-        common_matrix.to_csv(STAGE26/"06_common_human_gene_matrix.csv")
-        pd.DataFrame(meta).to_csv(STAGE26/"07_common_gene_sample_metadata.csv",index=False)
-    else:
-        common_matrix=pd.DataFrame()
-
-    overlap_rows=[]
-    for i,a in enumerate(sorted(gene_mats)):
-        for b in sorted(gene_mats)[i+1:]:
-            overlap_rows.append({"dataset_a":a,"dataset_b":b,"n_genes_a":len(gene_mats[a]),"n_genes_b":len(gene_mats[b]),"common_human_genes":len(set(gene_mats[a]).intersection(gene_mats[b]))})
-    pd.DataFrame(overlap_rows).to_csv(STAGE26/"05_pairwise_human_gene_overlap.csv",index=False)
-
-    decision=pd.DataFrame([{
-        "stage":"2.6",
-        "n_datasets_with_gene_matrix":len(gene_mats),
-        "n_common_human_genes":len(common),
-        "n_common_samples":common_matrix.shape[1] if not common_matrix.empty else 0,
-        "status":"ready_for_biological_state_space" if len(common)>=500 else "insufficient_common_gene_space",
-        "time_used_to_build_feature_space":False,
-        "cross_species_mapping":"Ensembl BioMart Compara" if not mouse_map.empty else "unavailable",
-        "scRNA_representation":"sample_pseudobulk_from_GSE297234.py",
-        "platform_mapping":"GEO GPL annotation",
-    }])
-    decision.to_csv(STAGE26/"08_stage26_decision.csv",index=False)
-
-    print(audit.to_string(index=False))
-    print(f"common human genes = {len(common):,}")
-    print(f"datasets contributing to common space = {len(gene_mats)}")
-    print("time used to construct feature space = False")
-    print("status = " + decision.iloc[0].status)
-    return decision.iloc[0], common_matrix, audit
+def direct_gene_matrix(expr,dataset):
+    if expr is None: return None,pd.DataFrame()
+    ids=pd.Series(expr.index.astype(str),index=expr.index)
+    mapped=ids.map(normalize_gene_symbol)
+    valid=mapped.notna() & mapped.str.match(r"^[A-Z0-9][A-Z0-9._-]*$",na=False)
+    audit=pd.DataFrame({"feature_id":ids.values,"gene_symbol":mapped.values,"dataset":dataset,"mapped":valid.values})
+    gene=expr.loc[valid].copy(); gene.index=mapped[valid].values; gene=gene.groupby(level=0).mean()
+    return gene,audit
 
 
-def downstream_diagnostics(state):
-    # These stages remain explicitly diagnostic; they do not replace biological validation.
-    traj=state[state.time_hours.notna()].copy()
-    if traj.empty: return
+def mouse_to_human(symbols):
+    """Resolve mouse symbols to human symbols using Ensembl REST orthology."""
     rows=[]
-    for ds,g in traj.groupby("dataset"):
-        t=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
-        if len(t)<2: continue
-        dif=np.diff(t.to_numpy(float),axis=0); speed=np.linalg.norm(dif,axis=1)
-        rows.append({"dataset":ds,"n_timepoints":len(t),"path_length":float(speed.sum()),"mean_step":float(speed.mean()),"max_step":float(speed.max())})
-    pd.DataFrame(rows).to_csv(OUT/"stage3"/"01_trajectory_metrics.csv",index=False)
+    url="https://rest.ensembl.org/homology/symbol/mus_musculus/"
+    for symbol in sorted(set(symbols)):
+        try:
+            req=urllib.request.Request(url+urllib.parse.quote(symbol)+"?target_species=homo_sapiens;type=orthologues",headers={"Content-Type":"application/json","Accept":"application/json"})
+            with urllib.request.urlopen(req,timeout=30) as r:
+                data=__import__("json").load(r)
+            for h in data.get("data",[]):
+                for hom in h.get("homologies",[]):
+                    target=hom.get("target",{})
+                    hs=normalize_gene_symbol(target.get("display_name") or target.get("id"))
+                    if hs: rows.append({"mouse_gene":normalize_gene_symbol(symbol),"human_gene":hs})
+        except Exception:
+            continue
+    return pd.DataFrame(rows).drop_duplicates()
 
-    stab=[]
-    for ds,g in traj.groupby("dataset"):
-        t=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
-        if len(t)<3: continue
-        speed=np.linalg.norm(np.diff(t.to_numpy(float),axis=0),axis=1)
-        stab.append({"dataset":ds,"mean_step":speed.mean(),"step_cv":speed.std(ddof=0)/(speed.mean()+1e-12),"early_step":speed[0],"late_step":speed[-1]})
-    pd.DataFrame(stab).to_csv(OUT/"stage4"/"01_dynamics_stability_diagnostics.csv",index=False)
 
-    pred=[]
-    for ds,g in traj.groupby("dataset"):
-        t=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
-        if len(t)<3: continue
-        u=t.index.to_numpy(float)
-        for j in range(3):
-            coef=np.polyfit(u,t.iloc[:,j].to_numpy(float),min(2,len(t)-1))
-            fit=np.polyval(coef,u)
-            pred.append({"dataset":ds,"axis":j+1,"rmse_polynomial":float(np.sqrt(np.mean((fit-t.iloc[:,j])**2)))})
-    pd.DataFrame(pred).to_csv(OUT/"stage5"/"01_low_order_dynamics_fit.csv",index=False)
-
-    sym=[]
-    for ds,g in traj.groupby("dataset"):
-        t=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
-        if len(t)<3: continue
-        tt=t.index.to_numpy(float); z=t.to_numpy(float)
-        dz=np.gradient(z,tt,axis=0)
-        for j in range(3):
-            coef=np.polyfit(z[:,j],dz[:,j],1)
-            fit=np.polyval(coef,z[:,j])
-            sym.append({"dataset":ds,"state_axis":j+1,"equation":"dz/dt = a*z + b","a":coef[0],"b":coef[1],"fit_rmse":float(np.sqrt(np.mean((fit-dz[:,j])**2)))})
-    pd.DataFrame(sym).to_csv(OUT/"stage6"/"01_symbolic_linear_diagnostics.csv",index=False)
-    pd.DataFrame([{"dataset":d} for d in sorted(traj.dataset.unique())]).to_csv(OUT/"stage7"/"01_held_out_dataset_inventory.csv",index=False)
-    reg=[]
-    peak_report=RESULTS/"GSE67520"/"01_sample_metadata.csv"
-    if peak_report.exists():
-        reg=pd.read_csv(peak_report).to_dict("records")
-    pd.DataFrame(reg).to_csv(OUT/"stage8"/"01_regulatory_context.csv",index=False)
-    pairs=[]
-    ds=sorted(traj.dataset.unique())
-    for i,a in enumerate(ds):
-        for b in ds[i+1:]: pairs.append({"dataset_a":a,"dataset_b":b,"available_for_prediction_comparison":True})
-    pd.DataFrame(pairs).to_csv(OUT/"stage9"/"01_prediction_pairs.csv",index=False)
+def stage2_6(state):
+    audit_rows=[]; matrices={}; mapping_outputs=[]
+    for ds,path in FEATURE_FILES.items():
+        expr=read_feature_matrix(path)
+        if expr is None:
+            audit_rows.append({"dataset":ds,"feature_file":str(path),"n_features":0,"n_samples":0,"mapped_features":0,"mapped_genes":0,"status":"feature_matrix_unavailable"}); continue
+        if ds in PLATFORMS:
+            gpl,species=PLATFORMS[ds]; mapping=fetch_platform_mapping(gpl)
+            gene,audit=map_matrix_to_genes(expr,mapping,ds)
+            audit.to_csv(STAGE26/f"{ds}_feature_to_gene.csv",index=False)
+            mapped_features=int(audit.mapped.sum()); mapped_genes=int(gene.shape[0])
+            if species=="mouse" and not gene.empty:
+                ort=mouse_to_human(gene.index)
+                ort.to_csv(STAGE26/f"{ds}_mouse_human_ortholog_map.csv",index=False)
+                if not ort.empty:
+                    gene=gene.loc[gene.index.isin(ort.mouse_gene)].copy()
+                    gene.index=[ort.drop_duplicates("mouse_gene").set_index("mouse_gene").loc[x,"human_gene"] for x in gene.index]
+                    gene=gene.groupby(level=0).mean()
+            matrices[ds]=gene
+            mapping_outputs.append(audit)
+            audit_rows.append({"dataset":ds,"feature_file":str(path),"n_features":expr.shape[0],"n_samples":expr.shape[1],"mapped_features":mapped_features,"mapped_genes":gene.shape[0],"status":"mapped_to_human_gene_space" if not gene.empty else "no_gene_mapping"})
+        else:
+            gene,audit=direct_gene_matrix(expr,ds)
+            audit.to_csv(STAGE26/f"{ds}_feature_to_gene.csv",index=False)
+            matrices[ds]=gene
+            audit_rows.append({"dataset":ds,"feature_file":str(path),"n_features":expr.shape[0],"n_samples":expr.shape[1],"mapped_features":int(audit.mapped.sum()),"mapped_genes":gene.shape[0],"status":"direct_gene_ids" if not gene.empty else "no_gene_mapping"})
+    audit_df=pd.DataFrame(audit_rows); audit_df.to_csv(STAGE26/"01_gene_mapping_audit.csv",index=False)
+    if matrices:
+        genes=sorted(set.intersection(*(set(x.index) for x in matrices.values() if x is not None and not x.empty))) if all(x is not None and not x.empty for x in matrices.values()) else []
+        overlap_rows=[]; dslist=sorted(matrices)
+        for i,a in enumerate(dslist):
+            for b in dslist[i+1:]:
+                overlap_rows.append({"dataset_a":a,"dataset_b":b,"common_human_genes":len(set(matrices[a].index)&set(matrices[b].index))})
+        pd.DataFrame(overlap_rows).to_csv(STAGE26/"05_pairwise_human_gene_overlap.csv",index=False)
+        if genes:
+            parts=[]
+            for ds in dslist:
+                x=matrices[ds].loc[genes].copy()
+                x=x.sub(x.mean(axis=1),axis=0).div(x.std(axis=1,ddof=0).replace(0,np.nan),axis=0).fillna(0)
+                x.columns=[f"{ds}__{c}" for c in x.columns]
+                parts.append(x)
+            common=pd.concat(parts,axis=1)
+            common.to_csv(STAGE26/"06_common_human_gene_matrix.csv")
+            meta=pd.DataFrame({"sample":common.columns})
+            meta["dataset"]=meta.sample.str.split("__",n=1).str[0]
+            meta["original_sample"]=meta.sample.str.split("__",n=1).str[1]
+            meta.to_csv(STAGE26/"07_common_gene_sample_metadata.csv",index=False)
+    status="success" if genes else "insufficient_common_human_gene_space"
+    pd.DataFrame([{"common_human_genes":len(genes),"n_datasets":len(matrices),"status":status,"time_used_for_feature_construction":False}]).to_csv(STAGE26/"08_stage26_decision.csv",index=False)
+    print("\n========================================================================================")
+    print("STAGE 2.6 — TIME-INDEPENDENT BIOLOGICAL GENE-LEVEL HARMONIZATION")
+    print("========================================================================================")
+    print(audit_df.to_string(index=False))
+    print(f"\ncommon human genes across all contributing datasets = {len(genes)}")
+    print(f"datasets contributing = {len(matrices)}")
+    print(f"status = {status}")
+    print("NOTE: time is not used to construct the feature space. Platform mapping, mouse-human orthology and scRNA sample-level pseudobulk are explicit harmonization steps.")
+    print("========================================================================================\n")
+    return matrices,genes
 
 
 def main():
-    state, availability=stage1_data_integration()
+    state,availability=stage1_data_integration()
     aligned=stage2_1(state)
     stage2_2(aligned)
-    validated=stage2_3(aligned)
     oos=stage2_4(aligned)
-    decision, common_matrix, audit=stage2_6_biological_harmonization()
-    downstream_diagnostics(aligned)
-    print("\n"+"="*88)
+    matrices,genes=stage2_6(aligned)
     print(f"Dynamics v5.0 results written to: {OUT}")
-    print(f"Datasets with PCA: {int(availability.PCA_file_found.sum()) if not availability.empty else 0}/5")
-    print(f"Stage 2.1 aligned trajectory datasets: {aligned[aligned.common_latent_status == 'time_anchored_aligned'].dataset.nunique() if not aligned.empty else 0}")
+    print(f"Datasets with PCA: {availability.PCA_file_found.sum()}/{len(availability)}")
+    print(f"Stage 2.1 aligned trajectory datasets: {aligned.common_latent_status.eq('time_anchored_aligned').groupby(aligned.dataset).any().sum()}")
     print(f"Stage 2.4 tested OOS rows: {len(oos)}")
-    print(f"Stage 2.6 common human genes: {decision['n_common_human_genes']}")
-    print(f"Stage 2.6 status: {decision['status']}")
-    print(f"Trajectory timepoints: {aligned[aligned.time_hours.notna()].time_hours.nunique() if not aligned.empty else 0}")
-    print("="*88)
+    print(f"Stage 2.6 common human genes: {len(genes)}")
 
 
-if __name__ == "__main__":
-    main()
+if __name__=="__main__": main()
