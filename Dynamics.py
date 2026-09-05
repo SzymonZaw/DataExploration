@@ -1,13 +1,15 @@
-"""Dynamics v4.0: staged OSKM reprogramming dynamics pipeline.
+"""Dynamics v4.1: staged OSKM reprogramming dynamics pipeline.
 
 Stages 1-5: integration, latent representation, trajectories, derivatives,
 and critical-transition indicators.
+Stage 2.1: time-anchored cross-study common latent representation.
 Stages 6-9: symbolic equation discovery, held-out validation, regulatory
 integration, and predictive AI preparation.
 
-Scientific boundary: Stage 2 remains study-normalized PCA rather than a proven
-shared biological latent space. Stages 6-9 prepare analyses; they do not claim
-a fitted biological law or causality.
+Scientific boundary: Stage 2.1 is a geometry/time-alignment layer, not a
+claim that heterogeneous platforms measure an identical molecular state.
+GSE67520 remains regulatory evidence and GSE52052 is context-only because it
+contains a single timepoint.
 """
 
 from pathlib import Path
@@ -20,6 +22,8 @@ RESULTS = ROOT / "results"
 OUT = RESULTS / "Dynamics"
 STAGE_DIRS = {i: OUT / f"stage{i}" for i in range(1, 10)}
 for d in STAGE_DIRS.values(): d.mkdir(parents=True, exist_ok=True)
+STAGE21 = OUT / "stage2_1"
+STAGE21.mkdir(parents=True, exist_ok=True)
 
 DATASETS = {
     "GSE28688": RESULTS / "GSE28688" / "non_normalized" / "07_PCA_coordinates.csv",
@@ -40,7 +44,6 @@ GSM_TIME = {
 }
 GSE28688_ROW_SAMPLE = [f"GSM{x}" for x in range(710513,710527)]
 GSE28688_ROW_TIME = [0.,0.,24.,24.,48.,48.,72.,72.,np.nan,np.nan,np.nan,np.nan,np.nan,np.nan]
-
 TIME_PATTERNS = {
     "GSE28688":[(r"24\s*h",24.),(r"48\s*h",48.),(r"72\s*h",72.)],
     "GSE148158":[(r"48",48.),(r"72",72.)],
@@ -107,7 +110,6 @@ def derivative(x,t):
 
 
 def stage1_data_integration():
-    """Stage 1: integrate PCA outputs and harmonise metadata."""
     availability=[]; parts=[]
     for dataset,path in DATASETS.items():
         coords=load_pca(path)
@@ -140,14 +142,88 @@ def stage2_latent_state(states):
     return out
 
 
-def stage3_trajectory_reconstruction(states):
-    """Stage 3: reconstruct trajectories after replicate averaging."""
-    if states.empty: return pd.DataFrame()
+def _trajectory_grid(states, dataset, grid):
+    g=states[(states["dataset"]==dataset)&states["time_hours"].notna()].copy()
+    if g["time_hours"].nunique()<2: return None
+    m=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
+    t=m.index.to_numpy(float); u=(t-t.min())/(t.max()-t.min())
+    # Collapse replicates first, then linearly interpolate the study trajectory.
+    return np.column_stack([np.interp(grid,u,m[c].to_numpy(float)) for c in ("latent_1","latent_2","latent_3")])
+
+
+def _procrustes_rotation(source, target):
+    """Return orthogonal rotation/reflection aligning source trajectory to target."""
+    a=source-source.mean(axis=0); b=target-target.mean(axis=0)
+    ua,_,vta=np.linalg.svd(a.T@b)
+    return ua@vta
+
+
+def stage2_1_common_latent_state(states):
+    """Stage 2.1: build a time-anchored common latent coordinate system.
+
+    PCA axes are not compared directly. Each trajectory is first centered and
+    scaled within study, represented on normalized biological time u in [0,1],
+    and then orthogonally aligned to a reference trajectory on a shared time
+    grid. The final coordinates are therefore comparable as *trajectory
+    geometry*, not as raw expression measurements. Context-only studies remain
+    outside the fit and are reported separately.
+    """
+    if states.empty: return states.copy()
+    trajectory_datasets=[d for d in states["dataset"].unique() if states.loc[(states["dataset"]==d)&states["time_hours"].notna(),"time_hours"].nunique()>=2]
+    grid=np.linspace(0,1,25)
+    curves={d:_trajectory_grid(states,d,grid) for d in trajectory_datasets}
+    curves={d:c for d,c in curves.items() if c is not None and np.isfinite(c).all()}
+    if not curves: return states.copy()
+    reference="GSE67462" if "GSE67462" in curves else sorted(curves)[0]
+    ref=curves[reference]
+    aligned={reference:ref}
+    for d,c in curves.items():
+        if d==reference: continue
+        aligned[d]=(c-c.mean(axis=0))@_procrustes_rotation(c,ref)
+        # Match the reference scale after rotation without changing geometry.
+        s=np.std(aligned[d],axis=0,ddof=0); r=np.std(ref,axis=0,ddof=0)
+        aligned[d]=aligned[d]*np.divide(r,np.where(s>0,s,1.0))
+        aligned[d]+=ref.mean(axis=0)
+
     rows=[]
-    timed=states[states["time_hours"].notna()]
+    for dataset in trajectory_datasets:
+        g=states[(states["dataset"]==dataset)&states["time_hours"].notna()].copy()
+        if dataset not in aligned: continue
+        m=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
+        t=m.index.to_numpy(float); u=(t-t.min())/(t.max()-t.min())
+        a=aligned[dataset]
+        for tt,uu in zip(t,u):
+            vals=[np.interp(uu,grid,a[:,j]) for j in range(3)]
+            rows.append({"dataset":dataset,"time_hours":tt,"normalized_time":uu,"common_latent_1":vals[0],"common_latent_2":vals[1],"common_latent_3":vals[2],"n_replicates":int((g["time_hours"]==tt).sum())})
+    common=pd.DataFrame(rows)
+    if not common.empty:
+        common.to_csv(STAGE21/"01_common_latent_trajectory.csv",index=False)
+    # Map each timed replicate to the aligned common coordinates by normalized time.
+    out=states.copy(); out["common_latent_1"]=np.nan; out["common_latent_2"]=np.nan; out["common_latent_3"]=np.nan; out["common_latent_status"]="not_aligned"
+    for dataset in trajectory_datasets:
+        if dataset not in aligned: continue
+        idx=out.index[(out["dataset"]==dataset)&out["time_hours"].notna()]
+        g=out.loc[idx]; t=g["time_hours"].to_numpy(float); tt=states.loc[idx,"time_hours"].to_numpy(float)
+        all_t=states[(states["dataset"]==dataset)&states["time_hours"].notna()]["time_hours"].to_numpy(float); lo,hi=all_t.min(),all_t.max(); u=(tt-lo)/(hi-lo)
+        a=aligned[dataset]
+        for j in range(3): out.loc[idx,f"common_latent_{j+1}"]=np.interp(u,grid,a[:,j])
+        out.loc[idx,"common_latent_status"]="time_anchored_aligned"
+    # Context-only datasets are deliberately retained but never used to fit alignment.
+    context=states[~states.index.isin(out.index[out["common_latent_status"]=="time_anchored_aligned"])][["dataset","sample","time_hours","stage"]].copy()
+    context.to_csv(STAGE21/"02_context_only_observations.csv",index=False)
+    pd.DataFrame({"reference_dataset":[reference],"trajectory_datasets":[";".join(sorted(curves))],"grid_points":[len(grid)],"alignment":"orthogonal Procrustes on normalized-time trajectories","fit_uses_context_only_data":[False],"interpretation":"trajectory geometry; not raw-expression equivalence"}).to_csv(STAGE21/"03_alignment_metadata.csv",index=False)
+    out.to_csv(STAGE21/"04_sample_common_latent_state.csv",index=False)
+    return out
+
+
+def stage3_trajectory_reconstruction(states):
+    """Stage 3: reconstruct trajectories in the common latent space."""
+    if states.empty: return pd.DataFrame()
+    rows=[]; timed=states[states["time_hours"].notna()]
     for dataset,g in timed.groupby("dataset"):
         if g["time_hours"].nunique()<2: continue
-        cols=[c for c in ("latent_1","latent_2","latent_3") if c in g]
+        cols=[c for c in ("common_latent_1","common_latent_2","common_latent_3") if c in g and g[c].notna().any()]
+        if len(cols)<3: continue
         m=g.groupby("time_hours",as_index=False)[cols].mean().sort_values("time_hours"); m.insert(0,"dataset",dataset)
         m["n_replicates"]=g.groupby("time_hours").size().reindex(m["time_hours"]).to_numpy(); rows.append(m)
     traj=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame()
@@ -161,10 +237,10 @@ def stage4_dynamics(traj):
     out=traj.copy()
     for dataset,idx in out.groupby("dataset").groups.items():
         sub=out.loc[idx].sort_values("time_hours"); t=sub["time_hours"].to_numpy(float)
-        for axis in ("latent_1","latent_2","latent_3"):
+        for axis in ("common_latent_1","common_latent_2","common_latent_3"):
             x=sub[axis].to_numpy(float); v=derivative(x,t) if len(x)>=2 else np.full(len(x),np.nan); a=derivative(v,t) if len(x)>=3 else np.full(len(x),np.nan)
             out.loc[sub.index,f"d{axis}_dt"]=v; out.loc[sub.index,f"d2{axis}_dt2"]=a
-    vcols=[f"dlatent_{i}_dt" for i in (1,2,3)]; acols=[f"d2latent_{i}_dt2" for i in (1,2,3)]
+    vcols=[f"dcommon_latent_{i}_dt" for i in (1,2,3)]; acols=[f"d2common_latent_{i}_dt2" for i in (1,2,3)]
     out["state_speed"]=np.sqrt(np.nansum(out[vcols].to_numpy(float)**2,axis=1)); out["state_acceleration"]=np.sqrt(np.nansum(out[acols].to_numpy(float)**2,axis=1))
     out.to_csv(STAGE_DIRS[4]/"01_dynamics.csv",index=False); return out
 
@@ -174,7 +250,7 @@ def stage5_critical_transitions(dynamics):
     if dynamics.empty: return dynamics.copy()
     out=dynamics.copy(); out["rolling_variance_latent1"]=np.nan; out["rolling_autocorrelation_latent1"]=np.nan
     for dataset,idx in out.groupby("dataset").groups.items():
-        sub=out.loc[idx].sort_values("time_hours"); s=sub["latent_1"]
+        sub=out.loc[idx].sort_values("time_hours"); s=sub["common_latent_1"]
         if len(s)>=3:
             w=min(5,len(s)); var=s.rolling(w,min_periods=3).var(); ac=s.rolling(w,min_periods=3).apply(lambda q:q.autocorr(1) if q.std()>0 else np.nan)
             out.loc[sub.index,"rolling_variance_latent1"]=var.to_numpy(); out.loc[sub.index,"rolling_autocorrelation_latent1"]=ac.to_numpy()
@@ -186,10 +262,10 @@ def stage6_symbolic_equation_discovery(dynamics):
     if dynamics.empty: return pd.DataFrame()
     rows=[]
     for dataset,g in dynamics.groupby("dataset"):
-        x=g["latent_1"].to_numpy(float); target=g["dlatent_1_dt"].to_numpy(float)
+        x=g["common_latent_1"].to_numpy(float); target=g["dcommon_latent_1_dt"].to_numpy(float)
         rows.append(pd.DataFrame({"dataset":dataset,"time_hours":g["time_hours"].to_numpy(float),"x":x,"target_dx_dt":target,"x2":x*x,"x3":x*x*x,"abs_x":np.abs(x),"sin_x":np.sin(x),"cos_x":np.cos(x),"log1p_abs_x":np.log1p(np.abs(x))}))
     table=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame(); table.to_csv(STAGE_DIRS[6]/"01_symbolic_regression_design.csv",index=False)
-    pd.DataFrame({"candidate_form":["dx/dt = f(x)","dx/dt = f(x,y)","dx/dt = f(x,y,z)"],"method":["symbolic regression","symbolic regression","symbolic regression"],"validation":["complete-dataset holdout"]*3,"status":["planned"]*3}).to_csv(STAGE_DIRS[6]/"02_symbolic_plan.csv",index=False)
+    pd.DataFrame({"candidate_form":["dx/dt = f(x)","dx/dt = f(x,y)","dx/dt = f(x,y,z)"],"method":["symbolic regression"]*3,"validation":["complete-dataset holdout"]*3,"status":["planned"]*3}).to_csv(STAGE_DIRS[6]/"02_symbolic_plan.csv",index=False)
     return table
 
 
@@ -214,17 +290,17 @@ def stage9_predictive_ai(dynamics):
     for dataset,g in dynamics.groupby("dataset"):
         g=g.sort_values("time_hours")
         for i in range(len(g)-1):
-            a,b=g.iloc[i],g.iloc[i+1]; rows.append({"dataset":dataset,"time_t":a["time_hours"],"time_next":b["time_hours"],"dt_hours":b["time_hours"]-a["time_hours"],"latent_1_t":a["latent_1"],"latent_2_t":a["latent_2"],"latent_3_t":a["latent_3"],"latent_1_next":b["latent_1"],"latent_2_next":b["latent_2"],"latent_3_next":b["latent_3"]})
+            a,b=g.iloc[i],g.iloc[i+1]; rows.append({"dataset":dataset,"time_t":a["time_hours"],"time_next":b["time_hours"],"dt_hours":b["time_hours"]-a["time_hours"],"common_latent_1_t":a["common_latent_1"],"common_latent_2_t":a["common_latent_2"],"common_latent_3_t":a["common_latent_3"],"common_latent_1_next":b["common_latent_1"],"common_latent_2_next":b["common_latent_2"],"common_latent_3_next":b["common_latent_3"]})
     table=pd.DataFrame(rows); table.to_csv(STAGE_DIRS[9]/"01_next_state_prediction_table.csv",index=False)
     pd.DataFrame({"model_target":["z(t+dt) from z(t), dt"],"validation_unit":["complete_dataset"],"status":["preparation_only"]}).to_csv(STAGE_DIRS[9]/"02_ai_prediction_plan.csv",index=False); return table
 
 
 def main():
-    states,av=stage1_data_integration(); states=stage2_latent_state(states); traj=stage3_trajectory_reconstruction(states); dyn=stage4_dynamics(traj); dyn=stage5_critical_transitions(dyn)
+    states,av=stage1_data_integration(); states=stage2_latent_state(states); states=stage2_1_common_latent_state(states); traj=stage3_trajectory_reconstruction(states); dyn=stage4_dynamics(traj); dyn=stage5_critical_transitions(dyn)
     sym=stage6_symbolic_equation_discovery(dyn); hold=stage7_heldout_validation(dyn); reg=stage8_regulatory_integration(dyn); pred=stage9_predictive_ai(dyn)
-    report=["Dynamics v4.0 — stages 1-9","","Stage 1: data integration and metadata harmonisation.","Stage 2: study-normalized latent state representation.","Stage 3: time-aware trajectory reconstruction.","Stage 4: derivative-based dynamics.","Stage 5: critical-transition/stability indicators.","Stage 6: symbolic equation-discovery design; no equation fitted.","Stage 7: complete-dataset held-out validation plan.","Stage 8: regulatory integration plan using GSE67520.","Stage 9: next-state predictive AI design; no model fitted.","","Scientific boundary: Stage 2 is not yet a proven cross-study biological latent space. Stages 6-9 remain preparation layers until the common representation and leakage-safe validation are established."]
+    report=["Dynamics v4.1 — stages 1-9 + Stage 2.1","","Stage 1: data integration and metadata harmonisation.","Stage 2: study-normalized PCA state representation.","Stage 2.1: time-anchored cross-study common latent trajectory geometry.","Stage 3: trajectory reconstruction in the common latent space.","Stage 4: derivative-based dynamics.","Stage 5: critical-transition/stability indicators.","Stage 6: symbolic equation-discovery design; no equation fitted.","Stage 7: complete-dataset held-out validation plan.","Stage 8: regulatory integration plan using GSE67520.","Stage 9: next-state predictive AI design; no model fitted.","","Scientific boundary: Stage 2.1 aligns trajectory geometry across studies; it does not establish raw-expression equivalence or causality. Context-only studies are not used to fit the alignment."]
     (OUT/"REPORT.txt").write_text("\n".join(report),encoding="utf-8")
-    print(f"Dynamics v4.0 results written to: {OUT}"); print(f"Datasets with PCA: {int(av['PCA_file_found'].sum())}/{len(DATASETS)}"); print(f"Trajectory timepoints: {len(traj)}"); print(f"Stage 6 symbolic rows: {len(sym)}"); print(f"Stage 7 held-out datasets: {len(hold)}"); print(f"Stage 8 regulatory rows: {len(reg)}"); print(f"Stage 9 prediction pairs: {len(pred)}")
+    print(f"Dynamics v4.1 results written to: {OUT}"); print(f"Datasets with PCA: {int(av['PCA_file_found'].sum())}/{len(DATASETS)}"); print(f"Stage 2.1 aligned trajectory datasets: {states.loc[states['common_latent_status']=='time_anchored_aligned','dataset'].nunique() if 'common_latent_status' in states else 0}"); print(f"Trajectory timepoints: {len(traj)}"); print(f"Stage 6 symbolic rows: {len(sym)}"); print(f"Stage 7 held-out datasets: {len(hold)}"); print(f"Stage 8 regulatory rows: {len(reg)}"); print(f"Stage 9 prediction pairs: {len(pred)}")
 
 
 if __name__=="__main__": main()
