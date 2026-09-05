@@ -44,11 +44,9 @@ expr.to_csv(OUT / "expression_raw_processed.csv")
 log = np.log2(expr + 1)
 log.to_csv(OUT / "expression_log2.csv")
 
-# Distribution QC
-fig, ax = plt.subplots(figsize=(12, 6)); ax.boxplot([log[c].dropna() for c in log], labels=log.columns, showfliers=False); ax.set_title("GSE52052 - log2 processed signal"); ax.set_ylabel("log2(signal + 1)"); ax.tick_params(axis="x",rotation=45); fig.tight_layout(); fig.savefig(OUT/"01_boxplot.png",dpi=250); plt.close(fig)
+fig, ax = plt.subplots(figsize=(12, 6)); ax.boxplot([log[c].dropna() for c in log], tick_labels=log.columns, showfliers=False); ax.set_title("GSE52052 - log2 processed signal"); ax.set_ylabel("log2(signal + 1)"); ax.tick_params(axis="x",rotation=45); fig.tight_layout(); fig.savefig(OUT/"01_boxplot.png",dpi=250); plt.close(fig)
 qc = pd.DataFrame({"mean":expr.mean(),"median":expr.median(),"sd":expr.std(),"missing":expr.isna().sum()}); qc.to_csv(OUT/"02_sample_QC.csv")
 
-# Quantile normalization for exploratory comparison
 x = log.to_numpy(float); order=np.argsort(x,axis=0); means=np.sort(x,axis=0).mean(axis=1); norm=np.empty_like(x)
 for j in range(x.shape[1]): norm[order[:,j],j]=means
 norm=pd.DataFrame(norm,index=log.index,columns=log.columns); norm.to_csv(OUT/"expression_quantile_normalized.csv")
