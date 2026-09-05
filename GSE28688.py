@@ -43,7 +43,7 @@ def explore(expr, label):
     log = np.log2(expr + 1); log.to_csv(out / "expression_log2.csv")
     norm = qnorm(log); norm.to_csv(out / "expression_normalized.csv")
 
-    fig, ax = plt.subplots(figsize=(12, 6)); ax.boxplot([log[c].dropna() for c in log], labels=log.columns, showfliers=False); ax.set_title(f"GSE28688 - {label} - distributions"); ax.tick_params(axis="x", rotation=45); fig.tight_layout(); fig.savefig(out / "01_boxplot.png", dpi=250); plt.close(fig)
+    fig, ax = plt.subplots(figsize=(12, 6)); ax.boxplot([log[c].dropna() for c in log], tick_labels=log.columns, showfliers=False); ax.set_title(f"GSE28688 - {label} - distributions"); ax.tick_params(axis="x", rotation=45); fig.tight_layout(); fig.savefig(out / "01_boxplot.png", dpi=250); plt.close(fig)
     qc = pd.DataFrame({"mean": expr.mean(), "median": expr.median(), "sd": expr.std(), "missing": expr.isna().sum()}); qc.to_csv(out / "02_sample_QC.csv")
     corr = norm.corr(); corr.to_csv(out / "03_sample_correlation.csv")
     fig, ax = plt.subplots(figsize=(8, 7)); im = ax.imshow(corr, vmin=-1, vmax=1); ax.set_xticks(range(len(corr))); ax.set_xticklabels(corr.columns, rotation=45, ha="right"); ax.set_yticks(range(len(corr))); ax.set_yticklabels(corr.index); ax.set_title(f"GSE28688 - {label} - correlation"); fig.colorbar(im, ax=ax, label="Pearson r"); fig.tight_layout(); fig.savefig(out / "04_sample_correlation.png", dpi=250); plt.close(fig)
@@ -62,11 +62,9 @@ def explore(expr, label):
     (out/"REPORT.txt").write_text("\n".join(report),encoding="utf-8")
 
 
-# Non-normalized matrix
 p = DATA / "GSE28688_non-normalized.txt.gz"
 if p.exists(): explore(expression(read_table(p)), "non_normalized")
 
-# Raw archive: inspect every candidate table and explore the first usable matrix.
 p = DATA / "GSE28688_RAW.tar"
 if p.exists():
     extract = ROOT / "GSE28688_extracted"
