@@ -24,9 +24,21 @@ GSE52052_GROUPS = {
     "H1_hESC": "H1_hESC",
 }
 
+GSE52052_GSM_GROUPS = {
+    "GSM1258008": "GFP_control",
+    "GSM1258009": "OSK_control_inhibitor",
+    "GSM1258010": "OSK_let7_inhibitor",
+    "GSM1258011": "OSKM",
+    "GSM1258012": "OSK_LIN41",
+    "GSM1258013": "H1_hESC",
+}
+
 
 def group_for_gse52052(sample):
     s = str(sample).strip()
+    for gsm, group in GSE52052_GSM_GROUPS.items():
+        if gsm in s:
+            return group
     for key, group in GSE52052_GROUPS.items():
         if s == key or s.startswith(key) or key in s:
             return group
@@ -55,7 +67,11 @@ def expression_section(name, lines):
     qc = read_csv(folder / "03_sample_QC.csv")
     corr = read_csv(folder / "04_sample_correlation.csv")
     var = read_csv(folder / "06_feature_variance.csv")
+    if var is None and name == "GSE52052":
+        var = read_csv(folder / "07_probe_variance.csv")
     pca = read_csv(folder / "07_PCA_coordinates.csv")
+    if pca is None and name == "GSE52052":
+        pca = read_csv(folder / "08_PCA_coordinates.csv")
     if name == "GSE52052" and meta is not None and "sample" in meta.columns:
         meta = meta.copy()
         meta["group"] = meta["sample"].map(group_for_gse52052)
