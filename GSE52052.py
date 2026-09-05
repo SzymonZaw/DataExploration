@@ -20,6 +20,17 @@ SAMPLE_GROUPS = {
     "H1_hESC": "H1_hESC",
 }
 
+
+def group_for_sample(sample):
+    s = str(sample).strip()
+    if s in SAMPLE_GROUPS:
+        return SAMPLE_GROUPS[s]
+    for key, group in SAMPLE_GROUPS.items():
+        if s.startswith(key) or key in s:
+            return group
+    return "unclassified"
+
+
 extract = ROOT / "GSE52052_extracted"
 extract.mkdir(exist_ok=True)
 if not any(extract.rglob("*.txt.gz")):
@@ -55,7 +66,7 @@ expr = pd.concat(signals, axis=1, join="inner")
 expr.to_csv(OUT / "expression_raw_processed.csv")
 
 metadata = pd.DataFrame({"sample": expr.columns})
-metadata["group"] = metadata["sample"].map(SAMPLE_GROUPS).fillna("unclassified")
+metadata["group"] = metadata["sample"].map(group_for_sample)
 metadata.to_csv(OUT / "01_sample_metadata.csv", index=False)
 
 log = np.log2(expr + 1)
@@ -69,7 +80,7 @@ ax.tick_params(axis="x", rotation=45)
 fig.tight_layout(); fig.savefig(OUT / "02_boxplot.png", dpi=250); plt.close(fig)
 
 qc = pd.DataFrame({"mean": expr.mean(), "median": expr.median(), "sd": expr.std(), "missing": expr.isna().sum()})
-qc["group"] = qc.index.map(SAMPLE_GROUPS).fillna("unclassified")
+qc["group"] = qc.index.map(group_for_sample)
 qc.to_csv(OUT / "03_sample_QC.csv")
 
 corr = log.corr()
@@ -104,7 +115,7 @@ PC = U * S
 EV = S**2 / np.sum(S**2)
 n_pc = min(5, PC.shape[1])
 coords = pd.DataFrame(PC[:, :n_pc], index=X.index, columns=[f"PC{i+1}" for i in range(n_pc)])
-coords["group"] = coords.index.map(SAMPLE_GROUPS).fillna("unclassified")
+coords["group"] = coords.index.map(group_for_sample)
 coords.to_csv(OUT / "08_PCA_coordinates.csv")
 
 if len(EV) >= 2:
