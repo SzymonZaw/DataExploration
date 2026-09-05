@@ -2,6 +2,7 @@ from pathlib import Path
 import gzip
 import tarfile
 import urllib.request
+import ssl
 
 import numpy as np
 import pandas as pd
@@ -16,29 +17,25 @@ ARCHIVE = DATA / "GSE67462_RAW.tar"
 MATRIX_URL = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE67nnn/GSE67462/matrix/GSE67462_series_matrix.txt.gz"
 
 SAMPLE_GROUPS = {
-    "2ndMEF_at_day0_rep1": "day0",
-    "2ndMEF_at_day0_rep2": "day0",
-    "Reprogramming_cells_at_day1_rep1": "day1",
-    "Reprogramming_cells_at_day1_rep2": "day1",
-    "Reprogramming_cells_at_day3_rep1": "day3",
-    "Reprogramming_cells_at_day3_rep2": "day3",
-    "Reprogramming_cells_at_day5_rep1": "day5",
-    "Reprogramming_cells_at_day5_rep2": "day5",
-    "Reprogramming_cells_at_day7_rep1": "day7",
-    "Reprogramming_cells_at_day7_rep2": "day7",
-    "Reprogramming_cells_at_day11_rep1": "day11",
-    "Reprogramming_cells_at_day11_rep2": "day11",
-    "Reprogramming_cells_at_day15_rep1": "day15",
-    "Reprogramming_cells_at_day15_rep2": "day15",
-    "Reprogrammed_cells_at_day18_rep1": "day18",
-    "Reprogrammed_cells_at_day18_rep2": "day18",
-    "iPSC_rep1": "iPSC",
-    "iPSC_rep2": "iPSC",
+    "GSM1647454": "day0", "GSM1647455": "day0", "GSM1647456": "day1", "GSM1647457": "day1",
+    "GSM1647458": "day3", "GSM1647459": "day3", "GSM1647460": "day5", "GSM1647461": "day5",
+    "GSM1647462": "day7", "GSM1647463": "day7", "GSM1647464": "day11", "GSM1647465": "day11",
+    "GSM1647466": "day15", "GSM1647467": "day15", "GSM1647468": "day18", "GSM1647469": "day18",
+    "GSM1647470": "iPSC", "GSM1647471": "iPSC",
+    "2ndMEF_at_day0_rep1": "day0", "2ndMEF_at_day0_rep2": "day0",
+    "Reprogramming_cells_at_day1_rep1": "day1", "Reprogramming_cells_at_day1_rep2": "day1",
+    "Reprogramming_cells_at_day3_rep1": "day3", "Reprogramming_cells_at_day3_rep2": "day3",
+    "Reprogramming_cells_at_day5_rep1": "day5", "Reprogramming_cells_at_day5_rep2": "day5",
+    "Reprogramming_cells_at_day7_rep1": "day7", "Reprogramming_cells_at_day7_rep2": "day7",
+    "Reprogramming_cells_at_day11_rep1": "day11", "Reprogramming_cells_at_day11_rep2": "day11",
+    "Reprogramming_cells_at_day15_rep1": "day15", "Reprogramming_cells_at_day15_rep2": "day15",
+    "Reprogrammed_cells_at_day18_rep1": "day18", "Reprogrammed_cells_at_day18_rep2": "day18",
+    "iPSC_rep1": "iPSC", "iPSC_rep2": "iPSC",
 }
 
 
 def group_for_sample(sample):
-    s = str(sample).strip()
+    s = str(sample).strip().strip('"')
     if s in SAMPLE_GROUPS:
         return SAMPLE_GROUPS[s]
     for key, group in SAMPLE_GROUPS.items():
@@ -70,9 +67,19 @@ def inspect_archive(path):
 
 def download_matrix():
     target = OUT / "GSE67462_series_matrix.txt.gz"
-    if not target.exists():
-        print("Downloading GEO Series Matrix for processed expression exploration...")
+    if target.exists() and target.stat().st_size > 0:
+        return target
+    print("Downloading GEO Series Matrix for processed expression exploration...")
+    try:
         urllib.request.urlretrieve(MATRIX_URL, target)
+    except Exception as first_error:
+        print(f"Standard HTTPS download failed: {first_error}")
+        print("Retrying with a compatibility SSL context...")
+        context = ssl._create_unverified_context()
+        with urllib.request.urlopen(MATRIX_URL, context=context) as response, open(target, "wb") as out:
+            out.write(response.read())
+    if target.stat().st_size == 0:
+        raise ValueError("Pobrany Series Matrix jest pusty.")
     return target
 
 
@@ -113,7 +120,6 @@ def explore(expr):
     metadata["group"] = metadata["sample"].map(group_for_sample)
     metadata.to_csv(OUT / "02_sample_metadata.csv", index=False)
 
-    # GEO sample values are already transformed/processed; do not apply a new raw-count normalization.
     log = expr.copy()
     log.to_csv(OUT / "03_expression_for_EDA.csv")
 
