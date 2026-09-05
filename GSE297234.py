@@ -41,8 +41,6 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 ARCHIVE = DATA / "GSE297234_RAW.tar"
 
-# Known GEO sample design. The mapping is deliberately explicit so that
-# biological time is available for the future dynamics stage.
 SAMPLE_INFO = {
     "GSM8986586": {"donor": "GM00731", "age_group": "aged", "day": 0},
     "GSM8986587": {"donor": "GM00731", "age_group": "aged", "day": 3},
@@ -120,7 +118,6 @@ def read_10x_h5(path):
     over cells immediately, avoiding construction of a huge dense matrix.
     """
     with h5py.File(path, "r") as h5:
-        # Standard 10x layout: matrix/{data,indices,indptr,shape,...}
         matrix = h5["matrix"]
         data = np.asarray(matrix["data"], dtype=np.float64)
         indices = np.asarray(matrix["indices"], dtype=np.int64)
@@ -135,8 +132,6 @@ def read_10x_h5(path):
         else:
             genes = [str(x) for x in range(shape[0])]
 
-    # 10x stores the sparse matrix in CSC-like form. Sum each row without
-    # importing scipy: accumulate each nonzero value to its feature index.
     counts = np.bincount(indices, weights=data, minlength=shape[0])
     return genes, counts, shape
 
@@ -182,8 +177,6 @@ def create_metadata(columns):
 
 
 def run_eda(counts, metadata):
-    # Pseudobulk CPM followed by log1p. This is only for exploratory
-    # sample-level geometry, not differential-expression testing.
     library_size = counts.sum(axis=0)
     cpm = counts.div(library_size.replace(0, np.nan), axis=1) * 1e6
     log_expr = np.log1p(cpm)
@@ -220,7 +213,9 @@ def run_eda(counts, metadata):
 
     top = variance.head(min(3000, len(variance))).index
     X = log_expr.loc[top].T.fillna(0.0)
-    X_np = X.to_numpy(float)
+    # to_numpy() may return a read-only view depending on pandas/NumPy
+    # versions; make an explicit writable copy before centering for SVD.
+    X_np = X.to_numpy(dtype=float, copy=True)
     X_np -= X_np.mean(axis=0, keepdims=True)
     U, S, _ = np.linalg.svd(X_np, full_matrices=False)
     pc = U * S
