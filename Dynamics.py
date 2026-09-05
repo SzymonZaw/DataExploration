@@ -1,8 +1,17 @@
-"""Dynamics v2.4: time-aware exploratory dynamics of OSKM reprogramming.
+"""Dynamics v3.0: staged exploratory dynamics pipeline for OSKM reprogramming.
 
-Uses existing PCA outputs, explicit biological time, replicate-safe derivatives,
-and study-internal standardized state coordinates. It does not assume PCA axes
-are comparable between studies and does not fit a biological law.
+Stages implemented in this single script:
+1. Data integration and metadata harmonisation.
+2. Study-normalized latent state representation.
+3. Time-aware trajectory reconstruction.
+4. Derivative-based dynamics.
+5. Critical-transition / stability indicators.
+
+Important scientific boundary:
+- PCA coordinates are standardized within each study.
+- Stage 2 is NOT yet a cross-study biological latent space.
+- No causal law, quantum mechanism, or relativistic mechanism is claimed.
+- Symbolic regression is not fitted here; its training table is prepared for a later stage.
 """
 
 from pathlib import Path
@@ -14,6 +23,10 @@ ROOT = Path(__file__).resolve().parent
 RESULTS = ROOT / "results"
 OUT = RESULTS / "Dynamics"
 OUT.mkdir(parents=True, exist_ok=True)
+
+STAGE_DIRS = {i: OUT / f"stage{i}" for i in range(1, 6)}
+for directory in STAGE_DIRS.values():
+    directory.mkdir(parents=True, exist_ok=True)
 
 DATASETS = {
     "GSE28688": RESULTS / "GSE28688" / "non_normalized" / "07_PCA_coordinates.csv",
@@ -46,9 +59,6 @@ GSM_TIME = {
     "GSM8986592": 168.0, "GSM8986593": 240.0,
 }
 
-# GSE28688 PCA was written with generic SAMPLE 1..14 row labels.
-# The EDA script preserves the original GEO sample order, so this explicit
-# positional mapping is preferable to guessing from PCA labels.
 GSE28688_ROW_TIME = [
     0.0, 0.0, 24.0, 24.0, 48.0, 48.0, 72.0, 72.0,
     np.nan, np.nan, np.nan, np.nan, np.nan, np.nan,
@@ -100,7 +110,7 @@ def time_hours(dataset, sample):
     return np.nan
 
 
-def stage(sample, t):
+def stage_label(sample, t):
     text = str(sample).lower()
     if re.search(r"ipsc|\bips\b", text):
         return "iPSC"
@@ -153,169 +163,258 @@ def derivative(x, t):
     return np.gradient(x, t)
 
 
-def process(dataset, path):
-    coords = load_pca(path)
-    if coords is None:
-        return None, [], "unavailable"
-    pcs = [c for c in ("PC1", "PC2", "PC3") if c in coords.columns]
-    out = coords[pcs].copy()
-    out.insert(0, "sample", out.index.astype(str))
-
-    # GSE28688 has generic PCA labels SAMPLE 1..14. Recover the original GEO
-    # sample IDs and biological times by row position, matching GSE28688.py's
-    # documented 14-sample order.
-    timing_source = "GSM_or_text"
-    if dataset == "GSE28688" and len(out) == len(GSE28688_ROW_SAMPLE):
-        out["sample"] = GSE28688_ROW_SAMPLE
-        timing_source = "GSE28688_GEO_row_order"
-
-    out["dataset"] = dataset
-    out["time_hours"] = [time_hours(dataset, s) for s in out["sample"]]
-    if dataset == "GSE28688" and timing_source == "GSE28688_GEO_row_order":
-        out["time_hours"] = GSE28688_ROW_TIME
-    out["stage"] = [stage(s, t) for s, t in zip(out["sample"], out["time_hours"])]
-    out["replicate"] = [replicate(s) for s in out["sample"]]
-    out["timing_source"] = timing_source
-
-    for pc in pcs:
-        out[f"{pc}_z"] = zscore(orient(out[pc]))
-
-    timed = out[out["time_hours"].notna()].copy()
-    if timed.empty:
-        for pc in pcs:
-            out[f"d{pc}_dt"] = np.nan
-        out["state_speed"] = np.nan
-        out["rolling_variance_PC1"] = np.nan
-        out["rolling_autocorrelation_PC1"] = np.nan
-        return out, pcs, "context_only"
-
-    zcols = [f"{pc}_z" for pc in pcs]
-    mean_state = timed.groupby("time_hours", as_index=False)[zcols].mean().sort_values("time_hours")
-    if len(mean_state) >= 2:
-        for pc in pcs:
-            mean_state[f"d{pc}_dt"] = derivative(
-                mean_state[f"{pc}_z"].to_numpy(), mean_state["time_hours"].to_numpy()
-            )
-        vcols = [f"d{pc}_dt" for pc in pcs]
-        mean_state["state_speed"] = np.sqrt(np.sum(mean_state[vcols].to_numpy() ** 2, axis=1))
-    else:
-        for pc in pcs:
-            mean_state[f"d{pc}_dt"] = np.nan
-        mean_state["state_speed"] = np.nan
-
-    mean_state["rolling_variance_PC1"] = np.nan
-    mean_state["rolling_autocorrelation_PC1"] = np.nan
-    if len(mean_state) >= 3:
-        s = mean_state["PC1_z"]
-        w = min(5, len(s))
-        mean_state["rolling_variance_PC1"] = s.rolling(w, min_periods=3).var().to_numpy()
-        mean_state["rolling_autocorrelation_PC1"] = s.rolling(w, min_periods=3).apply(
-            lambda q: q.autocorr(lag=1) if q.std() > 0 else np.nan, raw=False
-        ).to_numpy()
-
-    merge_cols = ["time_hours"] + [f"d{pc}_dt" for pc in pcs] + [
-        "state_speed", "rolling_variance_PC1", "rolling_autocorrelation_PC1"
-    ]
-    role = "trajectory" if len(mean_state) >= 2 else "context_only"
-    return out.merge(mean_state[merge_cols], on="time_hours", how="left"), pcs, role
-
-
-def summary(states):
-    rows = []
-    for dataset, g in states.groupby("dataset"):
-        t = g[g["time_hours"].notna()]
-        rows.append({
-            "dataset": dataset,
-            "role": "trajectory" if t["time_hours"].nunique() >= 2 else "context_only",
-            "n_samples": len(g),
-            "n_timed_samples": len(t),
-            "n_unique_times": t["time_hours"].nunique(),
-            "time_min_hours": t["time_hours"].min() if len(t) else np.nan,
-            "time_max_hours": t["time_hours"].max() if len(t) else np.nan,
-            "replicate_labelled": int((g["replicate"] != "unknown").sum()),
-            "mean_state_speed": t["state_speed"].mean() if len(t) else np.nan,
-            "max_state_speed": t["state_speed"].max() if len(t) else np.nan,
-        })
-    return pd.DataFrame(rows)
-
-
-def main():
+def stage1_data_integration():
+    """Stage 1: integrate PCA outputs and harmonise sample metadata."""
     availability, parts = [], []
-    roles = {}
     for dataset, path in DATASETS.items():
-        state, pcs, role = process(dataset, path)
-        found = state is not None
-        roles[dataset] = role
+        coords = load_pca(path)
+        if coords is None:
+            availability.append({
+                "dataset": dataset, "PCA_file_found": False, "n_samples": 0,
+                "n_timed_samples": 0, "n_unique_times": 0, "role": "unavailable",
+                "timing_source": "none", "path": str(path),
+            })
+            continue
+
+        pcs = [c for c in ("PC1", "PC2", "PC3") if c in coords.columns]
+        out = coords[pcs].copy()
+        out.insert(0, "sample", out.index.astype(str))
+        timing_source = "GSM_or_text"
+
+        if dataset == "GSE28688" and len(out) == len(GSE28688_ROW_SAMPLE):
+            out["sample"] = GSE28688_ROW_SAMPLE
+            timing_source = "GSE28688_GEO_row_order"
+
+        out["dataset"] = dataset
+        out["time_hours"] = [time_hours(dataset, s) for s in out["sample"]]
+        if dataset == "GSE28688" and timing_source == "GSE28688_GEO_row_order":
+            out["time_hours"] = GSE28688_ROW_TIME
+        out["stage"] = [stage_label(s, t) for s, t in zip(out["sample"], out["time_hours"])]
+        out["replicate"] = [replicate(s) for s in out["sample"]]
+        out["timing_source"] = timing_source
+        for pc in pcs:
+            out[f"{pc}_z"] = zscore(orient(out[pc]))
+
+        timed = out[out["time_hours"].notna()]
+        role = "trajectory" if timed["time_hours"].nunique() >= 2 else "context_only"
         availability.append({
             "dataset": dataset,
-            "PCA_file_found": found,
+            "PCA_file_found": True,
+            "n_samples": len(out),
+            "n_timed_samples": len(timed),
+            "n_unique_times": timed["time_hours"].nunique(),
             "role": role,
+            "timing_source": timing_source,
             "path": str(path),
-            "PCs_available": ",".join(pcs),
-            "timed_samples": int(state["time_hours"].notna().sum()) if found else 0,
-            "unique_times": int(state["time_hours"].dropna().nunique()) if found else 0,
-            "timing_source": state["timing_source"].iloc[0] if found else "none",
         })
-        if found:
-            parts.append(state)
+        parts.append(out)
 
-    pd.DataFrame(availability).to_csv(OUT / "01_dataset_availability.csv", index=False)
-    if not parts:
-        print("No PCA trajectories found.")
-        return
+    availability_df = pd.DataFrame(availability)
+    states = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    availability_df.to_csv(STAGE_DIRS[1] / "01_dataset_availability.csv", index=False)
+    states.to_csv(STAGE_DIRS[1] / "02_master_sample_metadata.csv", index=False)
+    return states, availability_df
 
-    states = pd.concat(parts, ignore_index=True)
-    states.to_csv(OUT / "02_time_aware_state_dynamics.csv", index=False)
-    summary(states).to_csv(OUT / "03_trajectory_summary.csv", index=False)
 
-    cols = ["dataset", "sample", "stage", "replicate", "time_hours", "timing_source",
-            "PC1_z", "dPC1_dt", "PC2_z", "dPC2_dt", "PC3_z", "dPC3_dt", "state_speed"]
-    training = states[[c for c in cols if c in states.columns]]
-    training = training[training["time_hours"].notna()].sort_values(["dataset", "time_hours", "sample"])
-    training.to_csv(OUT / "04_symbolic_training_table.csv", index=False)
+def stage2_latent_state(states):
+    """Stage 2: create a study-normalized low-dimensional state representation."""
+    if states.empty:
+        return states.copy()
 
-    source = training.groupby(["dataset", "time_hours"], as_index=False).agg(
-        PC1_z=("PC1_z", "mean"), dPC1_dt=("dPC1_dt", "mean")
-    ).dropna()
-    if len(source):
-        x = source["PC1_z"].to_numpy(float)
-        lib = pd.DataFrame({
-            "dataset": source["dataset"], "time_hours": source["time_hours"],
-            "constant": 1.0, "x": x, "x2": x**2, "x3": x**3,
-            "sin_x": np.sin(x), "cos_x": np.cos(x),
-            "log_abs_x": np.log1p(np.abs(x)), "target_dPC1_dt": source["dPC1_dt"],
+    out = states.copy()
+    zcols = [c for c in ("PC1_z", "PC2_z", "PC3_z") if c in out.columns]
+    out["latent_1"] = out["PC1_z"] if "PC1_z" in out.columns else np.nan
+    out["latent_2"] = out["PC2_z"] if "PC2_z" in out.columns else np.nan
+    out["latent_3"] = out["PC3_z"] if "PC3_z" in out.columns else np.nan
+    out["latent_space_type"] = "study_normalized_PCA"
+
+    out[["dataset", "sample", "time_hours", "stage", "replicate",
+         "latent_1", "latent_2", "latent_3", "latent_space_type"]].to_csv(
+        STAGE_DIRS[2] / "01_latent_state_coordinates.csv", index=False
+    )
+    return out
+
+
+def stage3_trajectory_reconstruction(states):
+    """Stage 3: reconstruct time-ordered trajectories and replicate means."""
+    if states.empty:
+        return states.copy(), pd.DataFrame()
+
+    timed = states[states["time_hours"].notna()].copy()
+    trajectory_rows = []
+    for dataset, group in timed.groupby("dataset"):
+        role = "trajectory" if group["time_hours"].nunique() >= 2 else "context_only"
+        if role != "trajectory":
+            continue
+        zcols = [c for c in ("latent_1", "latent_2", "latent_3") if c in group.columns]
+        mean_state = group.groupby("time_hours", as_index=False)[zcols].mean().sort_values("time_hours")
+        mean_state.insert(0, "dataset", dataset)
+        mean_state["n_replicates"] = group.groupby("time_hours").size().reindex(
+            mean_state["time_hours"]
+        ).to_numpy()
+        trajectory_rows.append(mean_state)
+
+    trajectories = pd.concat(trajectory_rows, ignore_index=True) if trajectory_rows else pd.DataFrame()
+    trajectories.to_csv(STAGE_DIRS[3] / "01_reconstructed_trajectories.csv", index=False)
+
+    summary_rows = []
+    for dataset, g in trajectories.groupby("dataset") if not trajectories.empty else []:
+        summary_rows.append({
+            "dataset": dataset,
+            "n_timepoints": g["time_hours"].nunique(),
+            "time_min_hours": g["time_hours"].min(),
+            "time_max_hours": g["time_hours"].max(),
+            "total_replicate_observations": int(g["n_replicates"].sum()),
         })
-        lib.to_csv(OUT / "05_symbolic_candidate_library.csv", index=False)
+    summary = pd.DataFrame(summary_rows)
+    summary.to_csv(STAGE_DIRS[3] / "02_trajectory_summary.csv", index=False)
+    return states, trajectories
 
+
+def stage4_dynamics(trajectories):
+    """Stage 4: calculate temporal derivatives, speed and acceleration."""
+    if trajectories.empty:
+        return trajectories.copy()
+
+    out = trajectories.copy()
+    for dataset, idx in out.groupby("dataset").groups.items():
+        sub = out.loc[idx].sort_values("time_hours")
+        t = sub["time_hours"].to_numpy(float)
+        for axis in ("latent_1", "latent_2", "latent_3"):
+            if axis not in sub.columns:
+                continue
+            x = sub[axis].to_numpy(float)
+            if len(x) >= 2:
+                v = derivative(x, t)
+                a = derivative(v, t) if len(x) >= 3 else np.full(len(x), np.nan)
+            else:
+                v = np.full(len(x), np.nan)
+                a = np.full(len(x), np.nan)
+            out.loc[sub.index, f"d{axis}_dt"] = v
+            out.loc[sub.index, f"d2{axis}_dt2"] = a
+
+    vcols = [c for c in ("dlatent_1_dt", "dlatent_2_dt", "dlatent_3_dt") if c in out.columns]
+    acols = [c for c in ("d2latent_1_dt2", "d2latent_2_dt2", "d2latent_3_dt2") if c in out.columns]
+    out["state_speed"] = np.sqrt(np.nansum(out[vcols].to_numpy(float) ** 2, axis=1)) if vcols else np.nan
+    out["state_acceleration"] = np.sqrt(np.nansum(out[acols].to_numpy(float) ** 2, axis=1)) if acols else np.nan
+    out.to_csv(STAGE_DIRS[4] / "01_dynamics.csv", index=False)
+
+    training = out[["dataset", "time_hours", "latent_1", "dlatent_1_dt",
+                    "latent_2", "dlatent_2_dt", "latent_3", "dlatent_3_dt",
+                    "state_speed", "state_acceleration"]].copy()
+    training.to_csv(STAGE_DIRS[4] / "02_symbolic_training_table.csv", index=False)
+    return out
+
+
+def stage5_critical_transitions(dynamics):
+    """Stage 5: calculate exploratory stability and critical-transition indicators."""
+    if dynamics.empty:
+        return dynamics.copy()
+
+    rows = []
+    for dataset, group in dynamics.groupby("dataset"):
+        g = group.sort_values("time_hours").copy()
+        x = g["latent_1"].astype(float)
+        n = len(g)
+        window = min(5, n)
+        g["rolling_variance"] = x.rolling(window, min_periods=3).var()
+        g["rolling_autocorrelation"] = x.rolling(window, min_periods=3).apply(
+            lambda q: q.autocorr(lag=1) if q.std() > 0 else np.nan, raw=False
+        )
+        g["trajectory_curvature_proxy"] = np.nan
+        if {"dlatent_1_dt", "dlatent_2_dt"}.issubset(g.columns):
+            v1 = g["dlatent_1_dt"].to_numpy(float)
+            v2 = g["dlatent_2_dt"].to_numpy(float)
+            angle = np.arctan2(v2, v1)
+            g["trajectory_curvature_proxy"] = np.abs(np.gradient(angle)) if n >= 2 else np.nan
+        rows.append(g)
+
+    out = pd.concat(rows, ignore_index=True)
+    out.to_csv(STAGE_DIRS[5] / "01_critical_transition_indicators.csv", index=False)
+
+    critical_rows = []
+    for dataset, g in out.groupby("dataset"):
+        score_columns = ["rolling_variance", "rolling_autocorrelation", "trajectory_curvature_proxy"]
+        candidates = []
+        for col in score_columns:
+            if col not in g.columns or g[col].dropna().empty:
+                continue
+            s = g[col]
+            idx = s.idxmax()
+            if pd.notna(s.loc[idx]):
+                candidates.append({
+                    "dataset": dataset,
+                    "indicator": col,
+                    "candidate_time_hours": g.loc[idx, "time_hours"],
+                    "indicator_value": s.loc[idx],
+                })
+        critical_rows.extend(candidates)
+
+    candidates_df = pd.DataFrame(critical_rows)
+    candidates_df.to_csv(STAGE_DIRS[5] / "02_candidate_critical_points.csv", index=False)
+    return out
+
+
+def write_report(availability):
+    rows = availability.to_dict("records") if not availability.empty else []
     report = [
-        "Dynamics v2.4 — time-aware exploratory dynamics of OSKM reprogramming", "",
-        "Biological time is recovered from GEO sample IDs, descriptive names, and an explicit",
-        "GSE28688 row-order mapping because its PCA file uses generic SAMPLE 1..14 labels.",
-        "Replicates at identical time points are averaged before derivatives are estimated.",
-        "PCA coordinates are standardized within each study; PCA axes are not assumed comparable between studies.",
-        "Only datasets with at least two unique numerical time points are trajectory datasets.",
-        "GSE52052 is context-only because all six samples are day 11.",
-        "GSE28688 hESC/iPS endpoint samples are retained as untimed context samples; the fibroblast",
-        "reprogramming segment is 0, 24, 48 and 72 h, with the 0 h pair representing HFF1 baseline.",
-        "The symbolic-regression table is a preparation layer, not a fitted biological equation.",
+        "Dynamics v3.0 — staged OSKM reprogramming dynamics pipeline", "",
+        "STAGE 1: Data integration and metadata harmonisation.",
+        "STAGE 2: Study-normalized low-dimensional latent state representation.",
+        "STAGE 3: Time-aware trajectory reconstruction with replicate averaging.",
+        "STAGE 4: Derivatives, state speed and acceleration.",
+        "STAGE 5: Exploratory critical-transition and stability indicators.", "",
+        "Dataset timing summary:",
+    ]
+    for row in rows:
+        report.append(
+            f"  {row['dataset']}: role={row['role']}, samples={row['n_samples']}, "
+            f"timed={row['n_timed_samples']}, unique_times={row['n_unique_times']}, "
+            f"timing={row['timing_source']}"
+        )
+    report += [
         "",
-        "Research target: test whether independent reprogramming experiments share a robust",
-        "low-dimensional temporal dynamical structure and whether a model learned on one",
-        "complete experiment can predict an entirely held-out experiment.",
-        "",
-        "Limitations: derivatives depend on sampling density and preprocessing; current PC coordinates",
-        "do not constitute a shared biological latent space; stability indicators are hypothesis-generating",
-        "only; no causal, quantum, or relativistic mechanism is claimed.",
+        "Scientific boundary:",
+        "Stage 2 is study-normalized PCA, not a validated cross-study biological latent space.",
+        "Independent datasets must not be treated as directly comparable PC coordinate systems.",
+        "Stage 5 indicators are hypothesis-generating and do not establish bifurcation or causality.",
+        "The symbolic training table is preparation for later symbolic regression, not a fitted law.",
+        "No quantum or relativistic biological mechanism is assumed.",
     ]
     (OUT / "REPORT.txt").write_text("\n".join(report), encoding="utf-8")
 
-    print(f"Dynamics v2.4 results written to: {OUT}")
-    print(f"Datasets with PCA: {len(parts)}/{len(DATASETS)}")
-    print(f"Time-aware observations: {len(training)}")
+
+def main():
+    print("=== STAGE 1: DATA INTEGRATION ===")
+    states, availability = stage1_data_integration()
+
+    print("=== STAGE 2: LATENT STATE REPRESENTATION ===")
+    states = stage2_latent_state(states)
+
+    print("=== STAGE 3: TRAJECTORY RECONSTRUCTION ===")
+    states, trajectories = stage3_trajectory_reconstruction(states)
+
+    print("=== STAGE 4: DYNAMICS ===")
+    dynamics = stage4_dynamics(trajectories)
+
+    print("=== STAGE 5: CRITICAL TRANSITIONS ===")
+    stage5_critical_transitions(dynamics)
+
+    write_report(availability)
+
+    print(f"Dynamics v3.0 results written to: {OUT}")
+    print(f"Datasets with PCA: {int(availability['PCA_file_found'].sum())}/{len(DATASETS)}")
+    print(f"Time-aware observations: {int(states['time_hours'].notna().sum()) if not states.empty else 0}")
+    print(f"Trajectory datasets: {int((availability['role'] == 'trajectory').sum())}")
     print("Replicate-safe derivative calculation: enabled")
+    print("Stages 1-5: completed")
     print("Dataset timing summary:")
-    for row in availability:
-        print(f"  {row['dataset']}: PCA={row['PCA_file_found']}, role={row['role']}, timed={row['timed_samples']}, unique_times={row['unique_times']}, timing={row['timing_source']}")
+    for row in availability.to_dict("records"):
+        print(
+            f"  {row['dataset']}: PCA={row['PCA_file_found']}, role={row['role']}, "
+            f"timed={row['n_timed_samples']}, unique_times={row['n_unique_times']}, "
+            f"timing={row['timing_source']}"
+        )
 
 
 if __name__ == "__main__":
