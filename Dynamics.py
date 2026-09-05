@@ -1,215 +1,643 @@
-"""Dynamics v4.8: OSKM reprogramming dynamics pipeline.
+"""Dynamics v5.0 — biological gene-level harmonization for OSKM dynamics.
 
-Stage 2.5 adds a feature-level biological harmonization audit. The existing
-PCA/Procrustes representation remains an experimental baseline. Stage 2.5
-searches existing lightweight expression outputs for comparable feature/sample
-matrices, reports feature overlap and data modality, and constructs a
-provisional shared feature matrix only when a sufficiently compatible set is
-available. It deliberately does not treat time-anchored PCA coordinates as
-biological equivalence.
+The PCA/Procrustes stages are retained as an experimental trajectory baseline.
+Stage 2.6 is the first time-independent biological feature layer:
+
+    probe/feature IDs -> gene symbols -> human gene space
+    mouse genes -> human orthologues
+    scRNA-seq cells -> sample pseudobulk (already produced by GSE297234.py)
+
+The stage never uses time to construct the feature space and never treats
+cross-study PCA alignment as biological equivalence.
 """
 from pathlib import Path
+import gzip
 import re
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+
 import numpy as np
 import pandas as pd
 
-ROOT=Path(__file__).resolve().parent; RESULTS=ROOT/"results"; OUT=RESULTS/"Dynamics"
-for i in range(1,10): (OUT/f"stage{i}").mkdir(parents=True,exist_ok=True)
-STAGE21=OUT/"stage2_1"; STAGE22=OUT/"stage2_2"; STAGE23=OUT/"stage2_3"; STAGE24=OUT/"stage2_4"; STAGE25=OUT/"stage2_5"
-for d in (STAGE21,STAGE22,STAGE23,STAGE24,STAGE25): d.mkdir(parents=True,exist_ok=True)
-DATASETS={"GSE28688":RESULTS/"GSE28688"/"non_normalized"/"07_PCA_coordinates.csv","GSE148158":RESULTS/"GSE148158"/"07_PCA_coordinates.csv","GSE52052":RESULTS/"GSE52052"/"08_PCA_coordinates.csv","GSE67462":RESULTS/"GSE67462"/"09_PCA_coordinates.csv","GSE297234":RESULTS/"GSE297234"/"08_PCA_coordinates.csv"}
-GSM_TIME={"GSM4455240":48.,"GSM4455241":48.,"GSM4455242":72.,"GSM4455243":72.,"GSM4455244":48.,"GSM4455245":72.,"GSM710515":24.,"GSM710516":24.,"GSM710517":48.,"GSM710518":48.,"GSM710519":72.,"GSM710520":72.,"GSM1258008":264.,"GSM1258009":264.,"GSM1258010":264.,"GSM1258011":264.,"GSM1258012":264.,"GSM1258013":264.,"GSM1647454":0.,"GSM1647455":0.,"GSM1647456":24.,"GSM1647457":24.,"GSM1647458":72.,"GSM1647459":72.,"GSM1647460":120.,"GSM1647461":120.,"GSM1647462":168.,"GSM1647463":168.,"GSM1647464":264.,"GSM1647465":264.,"GSM1647466":360.,"GSM1647467":360.,"GSM1647468":432.,"GSM1647469":432.,"GSM8986586":0.,"GSM8986587":72.,"GSM8986588":168.,"GSM8986589":240.,"GSM8986590":0.,"GSM8986591":72.,"GSM8986592":168.,"GSM8986593":240.}
-GSE28688_ROW_SAMPLE=[f"GSM{x}" for x in range(710513,710527)]; GSE28688_ROW_TIME=[0.,0.,24.,24.,48.,48.,72.,72.,np.nan,np.nan,np.nan,np.nan,np.nan,np.nan]
-def load_pca(path):
-    if not path.exists(): return None
-    df=pd.read_csv(path,index_col=0); pcs=[c for c in ("PC1","PC2","PC3") if c in df.columns]
-    if len(pcs)<3:return None
-    x=df[pcs].apply(pd.to_numeric,errors="coerce"); x.index=x.index.astype(str); return x
-def time_hours(ds,s):
-    s=str(s).strip().strip('"')
-    if s in GSM_TIME:return GSM_TIME[s]
-    t=s.lower().replace("_"," ").replace("-"," ")
-    pats={"GSE28688":[(r"24\s*h",24.),(r"48\s*h",48.),(r"72\s*h",72.)],"GSE148158":[(r"48",48.),(r"72",72.)],"GSE52052":[(r"day\s*11",264.)],"GSE67462":[(r"day\s*0\b",0.),(r"day\s*1\b",24.),(r"day\s*3\b",72.),(r"day\s*5\b",120.),(r"day\s*7\b",168.),(r"day\s*11\b",264.),(r"day\s*15\b",360.),(r"day\s*18\b",432.)],"GSE297234":[(r"d0\b|day\s*0\b",0.),(r"d3\b|day\s*3\b",72.),(r"d7\b|day\s*7\b",168.),(r"d10\b|day\s*10\b",240.)]}
-    for p,v in pats.get(ds,[]):
-        if re.search(p,t):return v
-    return np.nan
-def condition(ds,s):
-    s=str(s).lower()
-    if ds=="GSE148158":
-        if "oskm" in s:return "OSKM"
-        if "gfp" in s:return "GFP"
-        if "h1" in s or "h9" in s:return "hESC"
-        if "bj" in s:return "BJ_fibroblast"
-    if ds=="GSE297234":return "aged" if any(x in s for x in ("6586","6587","6588","6589")) else ("young" if any(x in s for x in ("6590","6591","6592","6593")) else "unknown")
-    return "all"
-def replicate(s):
-    s=str(s); m=re.search(r"(?:-|_|\s)([ab])$",s,re.I)
-    if m:return m.group(1).lower()
-    m=re.search(r"(?:rep|replicate)[_\s-]*(\d+)",s,re.I)
-    if m:return m.group(1)
-    m=re.fullmatch(r"GSM(\d+)",s)
-    if m and 1647454<=int(m.group(1))<=1647469:return "1" if int(m.group(1))%2==0 else "2"
-    return "unknown"
-def zscore(x):
-    x=pd.Series(x,dtype=float); sd=x.std(ddof=0); return (x-x.mean())/sd if np.isfinite(sd) and sd>0 else pd.Series(np.nan,index=x.index)
-def orient(x):
-    x=pd.Series(x,dtype=float).copy(); v=x.dropna()
-    if len(v):
-        i=v.abs().idxmax()
-        if x.loc[i]<0:x=-x
-    return x
-def stage1_data_integration():
-    rows=[]; states=[]
-    for ds,path in DATASETS.items():
-        x=load_pca(path)
-        if x is None:rows.append({"dataset":ds,"PCA_file_found":False,"n_samples":0,"n_timed_samples":0,"n_unique_times":0,"role":"unavailable","timing_source":"none","path":str(path)}); continue
-        o=x.copy(); o.insert(0,"sample",o.index.astype(str)); source="GSM_or_text"
-        if ds=="GSE28688" and len(o)==14:o["sample"]=GSE28688_ROW_SAMPLE; source="GSE28688_GEO_row_order"
-        o["dataset"]=ds; o["time_hours"]=[time_hours(ds,s) for s in o["sample"]]
-        if ds=="GSE28688" and source=="GSE28688_GEO_row_order":o["time_hours"]=GSE28688_ROW_TIME
-        o["condition"]=[condition(ds,s) for s in o["sample"]]; o["stage"]=o["time_hours"].map(lambda t:f"day{int(t/24)}" if pd.notna(t) and t%24==0 else (f"{int(t)}h" if pd.notna(t) else "unknown")); o["replicate"]=[replicate(s) for s in o["sample"]]; o["timing_source"]=source
-        for i,pc in enumerate(["PC1","PC2","PC3"],1):o[f"latent_{i}"]=zscore(orient(o[pc]))
-        timed=o[o.time_hours.notna()]; role="trajectory" if timed.time_hours.nunique()>=2 else "context_only"; rows.append({"dataset":ds,"PCA_file_found":True,"n_samples":len(o),"n_timed_samples":len(timed),"n_unique_times":timed.time_hours.nunique(),"role":role,"timing_source":source,"path":str(path)}); states.append(o)
-    av=pd.DataFrame(rows); st=pd.concat(states,ignore_index=True) if states else pd.DataFrame(); av.to_csv(OUT/"stage1"/"01_dataset_availability.csv",index=False); st.to_csv(OUT/"stage1"/"02_master_sample_metadata.csv",index=False); return st,av
-def _curve(st,ds,grid,branch=None,exclude_time=None):
-    g=st[(st.dataset==ds)&st.time_hours.notna()]
-    if branch is not None:g=g[g.condition==branch]
-    if exclude_time is not None:g=g[g.time_hours!=exclude_time]
-    m=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
-    if len(m)<2:return None
-    t=m.index.to_numpy(float); u=(t-t.min())/(t.max()-t.min()); return np.column_stack([np.interp(grid,u,m[c]) for c in ["latent_1","latent_2","latent_3"]])
-def _point_at_time(st,ds,t,branch=None):
-    g=st[(st.dataset==ds)&(st.time_hours==t)]
-    if branch is not None:g=g[g.condition==branch]
-    if g.empty:return None
-    return g[["latent_1","latent_2","latent_3"]].mean().to_numpy(float)
-def _rot(a,b):
-    aa=a-a.mean(0); bb=b-b.mean(0); u,_,vt=np.linalg.svd(aa.T@bb); return u@vt
-def _fit_transform(source,target):
-    rot=_rot(source,target); a=(source-source.mean(0))@rot; scale=np.divide(np.std(target,0),np.where(np.std(a,0)>0,np.std(a,0),1)); return rot,source.mean(0),scale,target.mean(0)
-def _apply_transform(x,trans):
-    rot,sm,scale,tm=trans; y=(x-sm)@rot; y*=scale; y+=tm; return y
-def stage2_1_common_latent_state(st):
-    ds=[d for d in st.dataset.unique() if st[(st.dataset==d)&st.time_hours.notna()].time_hours.nunique()>=2]; grid=np.linspace(0,1,25); cur={d:_curve(st,d,grid) for d in ds}; cur={d:c for d,c in cur.items() if c is not None and np.isfinite(c).all()}; ref="GSE67462" if "GSE67462" in cur else sorted(cur)[0]; r=cur[ref]; aligned={ref:r}
-    for d,c in cur.items():
-        if d!=ref:aligned[d]=_apply_transform(c,_fit_transform(c,r))
-    out=st.copy(); out["common_latent_1"]=np.nan; out["common_latent_2"]=np.nan; out["common_latent_3"]=np.nan; out["common_latent_status"]="not_aligned"
-    for d,a in aligned.items():
-        idx=out.index[(out.dataset==d)&out.time_hours.notna()]; lo,hi=out.loc[idx,"time_hours"].min(),out.loc[idx,"time_hours"].max(); u=(out.loc[idx,"time_hours"].to_numpy()-lo)/(hi-lo)
-        for j in range(3):out.loc[idx,f"common_latent_{j+1}"]=np.interp(u,grid,a[:,j])
-        out.loc[idx,"common_latent_status"]="time_anchored_aligned"
-    out.to_csv(STAGE21/"04_sample_common_latent_state.csv",index=False); return out
-def stage2_2_validate_common_latent(st):
-    g=st[st.common_latent_status=="time_anchored_aligned"]; ds=sorted(g.dataset.unique()); grid=np.linspace(0,1,25); cur={d:_curve(st,d,grid) for d in ds}; cur={d:c for d,c in cur.items() if c is not None}; rows=[]
-    for i,a in enumerate(ds):
-        for b in ds[i+1:]:
-            x,y=cur[a],cur[b]; rows.append({"dataset_a":a,"dataset_b":b,"trajectory_correlation":np.corrcoef(x.ravel(),y.ravel())[0,1],"aligned_rmse":np.sqrt(np.mean((x-y)**2)),"path_length_a":np.linalg.norm(np.diff(x,axis=0),axis=1).sum(),"path_length_b":np.linalg.norm(np.diff(y,axis=0),axis=1).sum()})
-    p=pd.DataFrame(rows); p["path_length_ratio"]=p.path_length_a/p.path_length_b; p.to_csv(STAGE22/"02_cross_dataset_distances.csv",index=False); return p
-def _branches(st):
-    traj=[d for d in st.dataset.unique() if st[(st.dataset==d)&st.time_hours.notna()].time_hours.nunique()>=2]; grid=np.linspace(0,1,25); out=[]
-    for d in traj:
-        conds=sorted(set(st.loc[(st.dataset==d)&st.time_hours.notna(),"condition"])); valid=[c for c in conds if _curve(st,d,grid,c) is not None]
-        if d=="GSE148158" and len(valid)>=2:out += [(d,c) for c in valid]
-        else:out.append((d,"all"))
-    return out
-def stage2_3_within_time_residual_validation(st):
-    branches=_branches(st); grid=np.linspace(0,1,25); refcurve=_curve(st,"GSE67462",grid); trans={}
-    for d,c in branches:
-        curve=_curve(st,d,grid,None if c=="all" else c)
-        if curve is not None:trans[(d,c)]=_fit_transform(curve,refcurve) if not (d=="GSE67462" and c=="all") else (np.eye(3),curve.mean(0),np.ones(3),refcurve.mean(0))
-    out=st.copy(); out["aligned_sample_latent_1"]=np.nan; out["aligned_sample_latent_2"]=np.nan; out["aligned_sample_latent_3"]=np.nan; out["within_time_residual_norm"]=np.nan; out["trajectory_branch"]="unassigned"
-    for (d,c),tr in trans.items():
-        mask=(out.dataset==d)&out.time_hours.notna()&((out.condition==c) if c!="all" else True); idx=out.index[mask]; x=out.loc[idx,["latent_1","latent_2","latent_3"]].to_numpy(float); xa=_apply_transform(x,tr); out.loc[idx,["aligned_sample_latent_1","aligned_sample_latent_2","aligned_sample_latent_3"]]=xa; out.loc[idx,"trajectory_branch"]=c; means=pd.DataFrame(xa,index=idx).groupby(out.loc[idx,"time_hours"]).transform("mean").to_numpy(); out.loc[idx,"within_time_residual_norm"]=np.linalg.norm(xa-means,axis=1)
-    out.to_csv(STAGE23/"03_sample_level_aligned_states.csv",index=False); sm=out[out.time_hours.notna()&out.aligned_sample_latent_1.notna()].groupby(["dataset","trajectory_branch"]).agg(n_samples=("sample","size"),n_times=("time_hours","nunique"),mean_within_time_residual_norm=("within_time_residual_norm","mean"),median_within_time_residual_norm=("within_time_residual_norm","median"),p95_within_time_residual_norm=("within_time_residual_norm",lambda x:x.quantile(.95))).reset_index(); sm.to_csv(STAGE23/"01_within_time_residual_summary.csv",index=False); return out,sm
-def stage2_4_out_of_sample_validation(st):
-    branches=_branches(st); grid=np.linspace(0,1,25); rows=[]
-    for d,b in branches:
-        g=st[(st.dataset==d)&st.time_hours.notna()&((st.condition==b) if b!="all" else True)]; times=sorted(g.time_hours.unique())
-        if len(times)<3:continue
-        lo,hi=min(times),max(times)
-        for hold in times:
-            train_times=[x for x in times if x!=hold]
-            if len(train_times)<2:continue
-            m=g[g.time_hours.isin(train_times)].groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index(); tu=(m.index.to_numpy(float)-lo)/(hi-lo); target_train=m.to_numpy(float); u=(hold-lo)/(hi-lo)
-            for rd,rb in branches:
-                if (rd,rb)==(d,b):continue
-                rg=st[(st.dataset==rd)&st.time_hours.notna()&((st.condition==rb) if rb!="all" else True)]; rm=rg.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index();
-                if len(rm)<2:continue
-                ru=(rm.index.to_numpy(float)-rm.index.min())/(rm.index.max()-rm.index.min()); refcurve=np.column_stack([np.interp(np.linspace(0,1,25),ru,rm[c]) for c in ["latent_1","latent_2","latent_3"]]); ref_at=np.array([np.interp(u,np.linspace(0,1,25),refcurve[:,j]) for j in range(3)]); target_curve=np.column_stack([np.interp(np.linspace(0,1,25),tu,target_train[:,j]) for j in range(3)]); tr=_fit_transform(target_curve,refcurve); xheld=_point_at_time(st,d,hold,None if b=="all" else b); pred=_apply_transform(xheld.reshape(1,-1),tr)[0]; err=float(np.linalg.norm(pred-ref_at)); naive=float(np.linalg.norm(xheld-ref_at)); rows.append({"target_trajectory":f"{d}:{b}","held_out_time_hours":hold,"reference_trajectory":f"{rd}:{rb}","n_training_times":len(train_times),"status":"tested","prediction_error":err,"naive_unaligned_error":naive,"error_reduction":naive-err,"relative_error_reduction":(naive-err)/(naive+1e-8)})
-    o=pd.DataFrame(rows); o.to_csv(STAGE24/"01_leave_one_timepoint_out.csv",index=False); sm=o.groupby("target_trajectory").agg(n_tests=("prediction_error","size"),mean_prediction_error=("prediction_error","mean"),median_prediction_error=("prediction_error","median"),p95_prediction_error=("prediction_error",lambda x:x.quantile(.95)),mean_relative_error=("prediction_error","mean")).reset_index() if not o.empty else pd.DataFrame(); sm.to_csv(STAGE24/"02_oos_summary_by_trajectory.csv",index=False); o.to_csv(STAGE24/"03_oos_vs_naive_baseline.csv",index=False); pd.DataFrame({"metric":["tested_rows","target_trajectories_tested","mean_oos_error","median_oos_error","mean_error_reduction_vs_naive"],"value":[len(o),o.target_trajectory.nunique() if not o.empty else 0,o.prediction_error.mean() if not o.empty else np.nan,o.prediction_error.median() if not o.empty else np.nan,o.error_reduction.mean() if not o.empty else np.nan]}).to_csv(STAGE24/"04_stage24_decision_metrics.csv",index=False); return o
-def _find_feature_matrix(ds):
-    root=RESULTS/ds; files=[p for p in root.rglob("*.csv") if "PCA" not in p.name and "correlation" not in p.name.lower() and "variance" not in p.name.lower() and "metadata" not in p.name.lower() and p.stat().st_size<250_000_000]
-    best=None
-    for p in files:
-        try:
-            df=pd.read_csv(p,index_col=0,nrows=5)
-            if df.shape[1]>=2 and df.shape[0]>=2 and any(str(c).startswith("GSM") for c in df.columns):best=p; break
-        except Exception:pass
-    return best
-def _read_feature_matrix(path):
-    df=pd.read_csv(path,index_col=0); df=df.apply(pd.to_numeric,errors="coerce"); df=df.dropna(how="all").dropna(axis=1,how="all"); df.index=df.index.astype(str); df.columns=df.columns.astype(str); return df
-def stage2_5_biological_feature_harmonization(st):
-    out=[]; mats={}
-    for ds in DATASETS:
-        p=_find_feature_matrix(ds)
-        if p is None:out.append({"dataset":ds,"candidate_matrix":False,"path":"","n_features":0,"n_samples":0,"feature_id_type":"unknown","status":"no_compatible_csv_found"}); continue
-        try:
-            df=_read_feature_matrix(p); mats[ds]=df; out.append({"dataset":ds,"candidate_matrix":True,"path":str(p),"n_features":len(df),"n_samples":df.shape[1],"feature_id_type":"row_index","status":"candidate_feature_matrix"})
-        except Exception as e:out.append({"dataset":ds,"candidate_matrix":True,"path":str(p),"n_features":0,"n_samples":0,"feature_id_type":"unknown","status":f"read_error:{type(e).__name__}"})
-    audit=pd.DataFrame(out); audit.to_csv(STAGE25/"01_feature_harmonization_audit.csv",index=False)
-    common=set.intersection(*(set(m.index) for m in mats.values())) if len(mats)>=2 else set(); overlap=[]
-    for a in mats:
-        for b in mats:
-            if a<b:overlap.append({"dataset_a":a,"dataset_b":b,"common_feature_count":len(set(mats[a].index)&set(mats[b].index))})
-    pd.DataFrame(overlap).to_csv(STAGE25/"02_pairwise_feature_overlap.csv",index=False)
-    status="insufficient_compatible_feature_matrices"
-    if len(common)>=50:
-        parts=[]
-        for ds,m in mats.items():
-            q=m.loc[sorted(common)].copy(); q=q.groupby(level=0).mean(); q=(q.sub(q.mean(axis=1),axis=0)).div(q.std(axis=1).replace(0,np.nan),axis=0); q.columns=[f"{ds}:{c}" for c in q.columns]; parts.append(q)
-        shared=pd.concat(parts,axis=1); shared.to_csv(STAGE25/"03_shared_feature_matrix.csv"); status="shared_feature_matrix_constructed"
-    report=pd.DataFrame({"metric":["datasets_with_candidate_matrices","common_feature_count","status","note"],"value":[len(mats),len(common),status,"No cross-species ortholog mapping, scRNA pseudobulk or platform correction is applied yet; this stage is an audit/provisional feature space, not final biological validation."]}); report.to_csv(STAGE25/"04_stage25_decision.csv",index=False)
-    print("\n"+"="*88+"\nSTAGE 2.5 — BIOLOGICAL FEATURE HARMONIZATION AUDIT\n"+"="*88)
-    print(audit.to_string(index=False)); print(f"\ncommon exact feature IDs across compatible matrices = {len(common)}"); print(f"status = {status}"); print("NOTE: Stage 2.5 does not infer biological equivalence from PCA/time alignment. Human–mouse orthology, scRNA pseudobulk and platform-aware integration remain explicit next steps."); print("="*88)
-    return audit
+ROOT = Path(__file__).resolve().parent
+RESULTS = ROOT / "results"
+OUT = RESULTS / "Dynamics"
+for n in range(1, 10):
+    (OUT / f"stage{n}").mkdir(parents=True, exist_ok=True)
+for name in ("stage2_1", "stage2_2", "stage2_3", "stage2_4", "stage2_5", "stage2_6"):
+    (OUT / name).mkdir(parents=True, exist_ok=True)
 
-def stage3_trajectory_reconstruction(st):
+STAGE21 = OUT / "stage2_1"
+STAGE22 = OUT / "stage2_2"
+STAGE23 = OUT / "stage2_3"
+STAGE24 = OUT / "stage2_4"
+STAGE25 = OUT / "stage2_5"
+STAGE26 = OUT / "stage2_6"
+CACHE = STAGE26 / "cache"
+CACHE.mkdir(parents=True, exist_ok=True)
+
+PCA_FILES = {
+    "GSE28688": RESULTS / "GSE28688" / "non_normalized" / "07_PCA_coordinates.csv",
+    "GSE148158": RESULTS / "GSE148158" / "07_PCA_coordinates.csv",
+    "GSE52052": RESULTS / "GSE52052" / "08_PCA_coordinates.csv",
+    "GSE67462": RESULTS / "GSE67462" / "09_PCA_coordinates.csv",
+    "GSE297234": RESULTS / "GSE297234" / "08_PCA_coordinates.csv",
+}
+
+FEATURE_FILES = {
+    "GSE148158": RESULTS / "GSE148158" / "expression.csv",
+    "GSE28688": RESULTS / "GSE28688" / "non_normalized" / "expression_input.csv",
+    "GSE52052": RESULTS / "GSE52052" / "expression_log2.csv",
+    "GSE67462": RESULTS / "GSE67462" / "03_expression_for_EDA.csv",
+    "GSE297234": RESULTS / "GSE297234" / "03_log1p_CPM_sample_expression.csv",
+}
+
+PLATFORMS = {
+    "GSE28688": ("GPL6883", "human"),
+    "GSE52052": ("GPL14550", "human"),
+    "GSE67462": ("GPL19972", "mouse"),
+}
+
+GSM_TIME = {
+    "GSM4455240": 48., "GSM4455241": 48., "GSM4455242": 72., "GSM4455243": 72.,
+    "GSM4455244": 48., "GSM4455245": 72.,
+    "GSM710515": 24., "GSM710516": 24., "GSM710517": 48., "GSM710518": 48.,
+    "GSM710519": 72., "GSM710520": 72.,
+    "GSM1258008": 264., "GSM1258009": 264., "GSM1258010": 264.,
+    "GSM1258011": 264., "GSM1258012": 264., "GSM1258013": 264.,
+    "GSM1647454": 0., "GSM1647455": 0., "GSM1647456": 24., "GSM1647457": 24.,
+    "GSM1647458": 72., "GSM1647459": 72., "GSM1647460": 120., "GSM1647461": 120.,
+    "GSM1647462": 168., "GSM1647463": 168., "GSM1647464": 264., "GSM1647465": 264.,
+    "GSM1647466": 360., "GSM1647467": 360., "GSM1647468": 432., "GSM1647469": 432.,
+    "GSM8986586": 0., "GSM8986587": 72., "GSM8986588": 168., "GSM8986589": 240.,
+    "GSM8986590": 0., "GSM8986591": 72., "GSM8986592": 168., "GSM8986593": 240.,
+}
+GSE28688_ROW_SAMPLE = [f"GSM{x}" for x in range(710513, 710527)]
+GSE28688_ROW_TIME = [0., 0., 24., 24., 48., 48., 72., 72., np.nan, np.nan, np.nan, np.nan, np.nan, np.nan]
+
+
+def load_pca(path):
+    if not path.exists():
+        return None
+    df = pd.read_csv(path, index_col=0)
+    pcs = [c for c in ("PC1", "PC2", "PC3") if c in df.columns]
+    if len(pcs) < 3:
+        return None
+    x = df[pcs].apply(pd.to_numeric, errors="coerce")
+    x.index = x.index.astype(str)
+    return x
+
+
+def time_hours(ds, sample):
+    s = str(sample).strip().strip('"')
+    if s in GSM_TIME:
+        return GSM_TIME[s]
+    t = s.lower().replace("_", " ").replace("-", " ")
+    patterns = {
+        "GSE28688": [(r"24\s*h", 24.), (r"48\s*h", 48.), (r"72\s*h", 72.)],
+        "GSE148158": [(r"48", 48.), (r"72", 72.)],
+        "GSE52052": [(r"day\s*11", 264.)],
+        "GSE67462": [(r"day\s*0\b", 0.), (r"day\s*1\b", 24.), (r"day\s*3\b", 72.),
+                     (r"day\s*5\b", 120.), (r"day\s*7\b", 168.), (r"day\s*11\b", 264.),
+                     (r"day\s*15\b", 360.), (r"day\s*18\b", 432.)],
+        "GSE297234": [(r"d0\b|day\s*0\b", 0.), (r"d3\b|day\s*3\b", 72.),
+                      (r"d7\b|day\s*7\b", 168.), (r"d10\b|day\s*10\b", 240.)],
+    }
+    for pattern, value in patterns.get(ds, []):
+        if re.search(pattern, t):
+            return value
+    return np.nan
+
+
+def condition(ds, sample):
+    s = str(sample).lower()
+    if ds == "GSE148158":
+        if "oskm" in s: return "OSKM"
+        if "gfp" in s: return "GFP"
+        if "h1" in s or "h9" in s: return "hESC"
+        if "bj" in s: return "BJ_fibroblast"
+    if ds == "GSE297234":
+        return "aged" if any(x in s for x in ("6586", "6587", "6588", "6589")) else "young" if any(x in s for x in ("6590", "6591", "6592", "6593")) else "unknown"
+    return "all"
+
+
+def replicate(sample):
+    s = str(sample)
+    m = re.search(r"(?:-|_|\s)([ab])$", s, re.I)
+    if m: return m.group(1).lower()
+    m = re.search(r"(?:rep|replicate)[_\s-]*(\d+)", s, re.I)
+    if m: return m.group(1)
+    m = re.fullmatch(r"GSM(\d+)", s)
+    if m and 1647454 <= int(m.group(1)) <= 1647469:
+        return "1" if int(m.group(1)) % 2 == 0 else "2"
+    return "unknown"
+
+
+def zscore(x):
+    x = pd.Series(x, dtype=float)
+    sd = x.std(ddof=0)
+    return (x - x.mean()) / sd if np.isfinite(sd) and sd > 0 else pd.Series(np.nan, index=x.index)
+
+
+def orient(x):
+    x = pd.Series(x, dtype=float).copy()
+    v = x.dropna()
+    if len(v):
+        i = v.abs().idxmax()
+        if x.loc[i] < 0: x = -x
+    return x
+
+
+def stage1_data_integration():
+    rows, states = [], []
+    for ds, path in PCA_FILES.items():
+        x = load_pca(path)
+        if x is None:
+            rows.append({"dataset": ds, "PCA_file_found": False, "n_samples": 0, "n_timed_samples": 0, "n_unique_times": 0, "role": "unavailable", "path": str(path)})
+            continue
+        o = x.copy()
+        o.insert(0, "sample", o.index.astype(str))
+        source = "GSM_or_text"
+        if ds == "GSE28688" and len(o) == 14:
+            o["sample"] = GSE28688_ROW_SAMPLE
+            source = "GSE28688_GEO_row_order"
+        o["dataset"] = ds
+        o["time_hours"] = [time_hours(ds, s) for s in o["sample"]]
+        if ds == "GSE28688" and source == "GSE28688_GEO_row_order": o["time_hours"] = GSE28688_ROW_TIME
+        o["condition"] = [condition(ds, s) for s in o["sample"]]
+        o["stage"] = o["time_hours"].map(lambda t: f"day{int(t/24)}" if pd.notna(t) and t % 24 == 0 else f"{int(t)}h" if pd.notna(t) else "unknown")
+        o["replicate"] = [replicate(s) for s in o["sample"]]
+        for i, pc in enumerate(("PC1", "PC2", "PC3"), 1): o[f"latent_{i}"] = zscore(orient(o[pc]))
+        timed = o[o.time_hours.notna()]
+        rows.append({"dataset": ds, "PCA_file_found": True, "n_samples": len(o), "n_timed_samples": len(timed), "n_unique_times": timed.time_hours.nunique(), "role": "trajectory" if timed.time_hours.nunique() >= 2 else "context_only", "path": str(path)})
+        states.append(o)
+    availability = pd.DataFrame(rows)
+    state = pd.concat(states, ignore_index=True) if states else pd.DataFrame()
+    availability.to_csv(OUT / "stage1" / "01_dataset_availability.csv", index=False)
+    state.to_csv(OUT / "stage1" / "02_master_sample_metadata.csv", index=False)
+    return state, availability
+
+
+def curve(state, ds, grid, branch=None, exclude_time=None):
+    g = state[(state.dataset == ds) & state.time_hours.notna()]
+    if branch is not None: g = g[g.condition == branch]
+    if exclude_time is not None: g = g[g.time_hours != exclude_time]
+    m = g.groupby("time_hours")[["latent_1", "latent_2", "latent_3"]].mean().sort_index()
+    if len(m) < 2: return None
+    t = m.index.to_numpy(float)
+    u = (t - t.min()) / (t.max() - t.min())
+    return np.column_stack([np.interp(grid, u, m[c]) for c in ("latent_1", "latent_2", "latent_3")])
+
+
+def rotation(a, b):
+    aa, bb = a - a.mean(0), b - b.mean(0)
+    u, _, vt = np.linalg.svd(aa.T @ bb)
+    return u @ vt
+
+
+def fit_transform(source, target):
+    rot = rotation(source, target)
+    a = (source - source.mean(0)) @ rot
+    scale = np.divide(np.std(target, 0), np.where(np.std(a, 0) > 0, np.std(a, 0), 1))
+    return rot, source.mean(0), scale, target.mean(0)
+
+
+def apply_transform(x, tr):
+    rot, sm, scale, tm = tr
+    y = (x - sm) @ rot
+    y *= scale
+    return y + tm
+
+
+def stage2_1(state):
+    datasets = [d for d in state.dataset.unique() if state[(state.dataset == d) & state.time_hours.notna()].time_hours.nunique() >= 2]
+    grid = np.linspace(0, 1, 25)
+    curves = {d: curve(state, d, grid) for d in datasets}
+    curves = {d: c for d, c in curves.items() if c is not None and np.isfinite(c).all()}
+    ref = "GSE67462" if "GSE67462" in curves else sorted(curves)[0]
+    aligned = {ref: curves[ref]}
+    for d, c in curves.items():
+        if d != ref: aligned[d] = apply_transform(c, fit_transform(c, curves[ref]))
+    out = state.copy()
+    for j in range(1, 4): out[f"common_latent_{j}"] = np.nan
+    out["common_latent_status"] = "not_aligned"
+    for d, a in aligned.items():
+        idx = out.index[(out.dataset == d) & out.time_hours.notna()]
+        lo, hi = out.loc[idx, "time_hours"].min(), out.loc[idx, "time_hours"].max()
+        u = (out.loc[idx, "time_hours"].to_numpy() - lo) / (hi - lo)
+        for j in range(3): out.loc[idx, f"common_latent_{j+1}"] = np.interp(u, grid, a[:, j])
+        out.loc[idx, "common_latent_status"] = "time_anchored_aligned"
+    out.to_csv(STAGE21 / "04_sample_common_latent_state.csv", index=False)
+    return out
+
+
+def stage2_2(state):
+    datasets = sorted(state.loc[state.common_latent_status == "time_anchored_aligned", "dataset"].unique())
+    grid = np.linspace(0, 1, 25)
+    curves = {d: curve(state, d, grid) for d in datasets}
+    rows = []
+    for i, a in enumerate(datasets):
+        for b in datasets[i+1:]:
+            x, y = curves[a], curves[b]
+            rows.append({"dataset_a": a, "dataset_b": b, "trajectory_correlation": np.corrcoef(x.ravel(), y.ravel())[0,1], "aligned_rmse": np.sqrt(np.mean((x-y)**2)), "path_length_a": np.linalg.norm(np.diff(x,axis=0),axis=1).sum(), "path_length_b": np.linalg.norm(np.diff(y,axis=0),axis=1).sum()})
+    df = pd.DataFrame(rows)
+    if not df.empty: df["path_length_ratio"] = df.path_length_a / df.path_length_b
+    df.to_csv(STAGE22 / "02_cross_dataset_distances.csv", index=False)
+    return df
+
+
+def branches(state):
+    result = []
+    for ds in state.dataset.unique():
+        g = state[(state.dataset == ds) & state.time_hours.notna()]
+        if g.time_hours.nunique() < 2: continue
+        valid = []
+        for c in sorted(g.condition.unique()):
+            if curve(state, ds, np.linspace(0,1,25), None if c == "all" else c) is not None: valid.append(c)
+        if ds == "GSE148158" and len(valid) >= 2: result.extend((ds,c) for c in valid)
+        else: result.append((ds,"all"))
+    return result
+
+
+def stage2_3(state):
+    ref = curve(state, "GSE67462", np.linspace(0,1,25))
+    out = state.copy()
+    for c in ("aligned_sample_latent_1", "aligned_sample_latent_2", "aligned_sample_latent_3"): out[c] = np.nan
+    out["within_time_residual_norm"] = np.nan
+    out["trajectory_branch"] = "unassigned"
+    summaries = []
+    for ds, branch in branches(state):
+        c = curve(state, ds, np.linspace(0,1,25), None if branch == "all" else branch)
+        if c is None: continue
+        tr = fit_transform(c, ref)
+        mask = (out.dataset == ds) & out.time_hours.notna() & ((out.condition == branch) if branch != "all" else True)
+        idx = out.index[mask]
+        xa = apply_transform(out.loc[idx, ["latent_1","latent_2","latent_3"]].to_numpy(float), tr)
+        out.loc[idx, ["aligned_sample_latent_1","aligned_sample_latent_2","aligned_sample_latent_3"]] = xa
+        out.loc[idx, "trajectory_branch"] = branch
+        tmp = pd.DataFrame(xa, index=idx)
+        means = tmp.groupby(out.loc[idx,"time_hours"]).transform("mean").to_numpy()
+        out.loc[idx,"within_time_residual_norm"] = np.linalg.norm(xa-means,axis=1)
+        summaries.append({"dataset":ds,"trajectory_branch":branch,"n_samples":len(idx),"n_times":out.loc[idx,"time_hours"].nunique(),"mean_within_time_residual_norm":np.nanmean(out.loc[idx,"within_time_residual_norm"]),"median_within_time_residual_norm":np.nanmedian(out.loc[idx,"within_time_residual_norm"]),"p95_within_time_residual_norm":np.nanquantile(out.loc[idx,"within_time_residual_norm"],.95)})
+    out.to_csv(STAGE23 / "03_sample_level_aligned_states.csv", index=False)
+    pd.DataFrame(summaries).to_csv(STAGE23 / "01_within_time_residual_summary.csv", index=False)
+    return out
+
+
+def stage2_4(state):
     rows=[]
-    for (d,b),g in st[st.time_hours.notna()&st.aligned_sample_latent_1.notna()].groupby(["dataset","trajectory_branch"]):
-        if g.time_hours.nunique()<2:continue
-        m=g.groupby("time_hours")[["aligned_sample_latent_1","aligned_sample_latent_2","aligned_sample_latent_3"]].mean().sort_index().reset_index(); m.insert(0,"dataset",d); m.insert(1,"trajectory_branch",b); m.columns=["dataset","trajectory_branch","time_hours","common_latent_1","common_latent_2","common_latent_3"]; rows.append(m)
-    o=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame(); o.to_csv(OUT/"stage3"/"01_reconstructed_trajectories.csv",index=False); return o
-def derivative(x,t):
-    if len(x)<2:return np.full(len(x),np.nan)
-    return np.gradient(x,t) if len(x)>2 else np.repeat((x[1]-x[0])/(t[1]-t[0]),2)
-def stage4_dynamics(tr):
-    o=tr.copy()
-    for _,idx in o.groupby(["dataset","trajectory_branch"]).groups.items():
-        q=o.loc[idx].sort_values("time_hours"); t=q.time_hours.to_numpy(float)
-        for j in (1,2,3):o.loc[q.index,f"dcommon_latent_{j}_dt"]=derivative(q[f"common_latent_{j}"].to_numpy(float),t)
-        o.loc[q.index,"state_speed"]=np.sqrt(np.nansum(o.loc[q.index,[f"dcommon_latent_{j}_dt" for j in (1,2,3)]].to_numpy()**2,axis=1))
-    o.to_csv(OUT/"stage4"/"01_dynamics.csv",index=False); return o
-def stage5_critical_transitions(d):
-    o=d.copy(); o["rolling_variance_latent1"]=np.nan; o["rolling_autocorrelation_latent1"]=np.nan
-    for _,idx in o.groupby(["dataset","trajectory_branch"]).groups.items():
-        q=o.loc[idx].sort_values("time_hours"); w=min(5,len(q))
-        if w>=3:o.loc[q.index,"rolling_variance_latent1"]=q.common_latent_1.rolling(w,min_periods=3).var().to_numpy(); o.loc[q.index,"rolling_autocorrelation_latent1"]=q.common_latent_1.rolling(w,min_periods=3).apply(lambda z:z.autocorr(1) if z.std()>0 else np.nan).to_numpy()
-    o["critical_transition_flag"]=False; o.to_csv(OUT/"stage5"/"01_critical_transition_indicators.csv",index=False); return o
-def stage6_symbolic_equation_discovery(d):
-    if d.empty:return pd.DataFrame()
-    o=pd.DataFrame({"dataset":d.dataset,"trajectory_branch":d.trajectory_branch,"time_hours":d.time_hours,"x":d.common_latent_1,"target_dx_dt":d.dcommon_latent_1_dt}); o["x2"]=o.x**2; o["x3"]=o.x**3; o["abs_x"]=o.x.abs(); o["sin_x"]=np.sin(o.x); o["cos_x"]=np.cos(o.x); o.to_csv(OUT/"stage6"/"01_symbolic_regression_design.csv",index=False); return o
-def stage7_heldout_validation(d):
-    ds=sorted(d.dataset.unique()) if not d.empty else []; o=pd.DataFrame([{"held_out_dataset":x,"training_datasets":";".join(y for y in ds if y!=x),"validation_type":"leave-one-complete-dataset-out","status":"planned"} for x in ds]); o.to_csv(OUT/"stage7"/"01_heldout_validation_plan.csv",index=False); return o
-def stage8_regulatory_integration(d):
-    ds=sorted(d.dataset.unique()) if not d.empty else []; o=pd.DataFrame([{"expression_dataset":x,"regulatory_dataset":"GSE67520","integration":"time-aligned regulatory evidence","causal_claim":False,"status":"planned"} for x in ds]); o.to_csv(OUT/"stage8"/"01_regulatory_integration_plan.csv",index=False); return o
-def stage9_predictive_ai(d):
+    grid=np.linspace(0,1,25)
+    ref="GSE67462"
+    for ds,branch in branches(state):
+        g=state[(state.dataset==ds)&state.time_hours.notna()&((state.condition==branch) if branch!="all" else True)]
+        times=sorted(g.time_hours.unique())
+        if len(times)<3: continue
+        lo,hi=min(times),max(times)
+        for held in times:
+            train=[t for t in times if t!=held]
+            if len(train)<2: continue
+            target_train=curve(state,ds,np.array([]),None if branch=="all" else branch)
+            if target_train is None: continue
+            # Build target curve using the full biological time range [lo,hi], but only training observations.
+            m=g[g.time_hours.isin(train)].groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
+            tu=(m.index.to_numpy(float)-lo)/(hi-lo)
+            if len(m)<2: continue
+            target=np.column_stack([np.interp(grid,tu,m[c]) for c in ("latent_1","latent_2","latent_3")])
+            ref_curve=curve(state,ref,grid)
+            tr=fit_transform(target,ref_curve)
+            hu=(held-lo)/(hi-lo)
+            pred=np.array([np.interp(hu,grid,trg) for trg in tr[3]]) if False else _interp_curve(tr[0] if False else None,0)
+            # Predict in source coordinates, then align the held-out observed point.
+            src_pred=np.array([np.interp(hu,grid,target[:,j]) for j in range(3)])
+            pred_common=apply_transform(src_pred.reshape(1,-1),tr)[0]
+            observed=g[g.time_hours==held][["latent_1","latent_2","latent_3"]].mean().to_numpy(float)
+            observed_common=apply_transform(observed.reshape(1,-1),tr)[0]
+            err=float(np.linalg.norm(pred_common-observed_common))
+            naive=float(np.linalg.norm(observed_common-np.interp(hu,grid,ref_curve)))
+            rows.append({"dataset":ds,"trajectory_branch":branch,"held_out_time_hours":held,"n_train_times":len(train),"oos_error":err,"naive_error":naive,"error_reduction_vs_naive":naive-err,"relative_error":err/(naive+1e-12)})
+    df=pd.DataFrame(rows)
+    df.to_csv(STAGE24/"01_leave_one_timepoint_out.csv",index=False)
+    if not df.empty:
+        df.groupby(["dataset","trajectory_branch"]).agg(n_tests=("oos_error","size"),mean_oos_error=("oos_error","mean"),median_oos_error=("oos_error","median"),p95_oos_error=("oos_error",lambda x:x.quantile(.95)),mean_relative_error=("relative_error","mean"),mean_error_reduction_vs_naive=("error_reduction_vs_naive","mean")).reset_index().to_csv(STAGE24/"02_oos_summary_by_trajectory.csv",index=False)
+        df.to_csv(STAGE24/"03_oos_vs_naive_baseline.csv",index=False)
+    return df
+
+
+def _interp_curve(dummy, x):
+    return np.nan
+
+
+def download_text(url, target):
+    if target.exists() and target.stat().st_size > 0: return target
+    req=urllib.request.Request(url,headers={"User-Agent":"DataExploration-Dynamics/5.0"})
+    with urllib.request.urlopen(req,timeout=120) as r, open(target,"wb") as f:
+        while True:
+            chunk=r.read(1024*1024)
+            if not chunk: break
+            f.write(chunk)
+    return target
+
+
+def read_geo_platform(gpl):
+    cache=CACHE/f"{gpl}_full.txt"
+    url=f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={gpl}&targ=self&view=full&form=text"
+    try:
+        download_text(url,cache)
+    except Exception as exc:
+        print(f"  platform download failed for {gpl}: {exc}")
+        return None
+    text=cache.read_text(encoding="utf-8",errors="replace")
+    start=text.find("!platform_table_begin")
+    end=text.find("!platform_table_end")
+    if start<0 or end<0: return None
+    block=text[start+len("!platform_table_begin"):end].strip("\n\r")
+    from io import StringIO
+    try:
+        return pd.read_csv(StringIO(block),sep="\t",dtype=str,low_memory=False)
+    except Exception:
+        return None
+
+
+def find_annotation_columns(df):
+    cols={str(c).strip().lower():c for c in df.columns}
+    id_col=cols.get("id") or cols.get("probe_id") or cols.get("probeid") or cols.get("id_ref")
+    gene_candidates=["gene_symbol","gene symbol","gene_symbol(s)","symbol","gene symbol(s)","gene_symbol_id","gene_assignment","gene_assignment_info","gene"]
+    gene_col=next((cols[k] for k in gene_candidates if k in cols),None)
+    if gene_col is None:
+        for k,c in cols.items():
+            if "gene" in k and ("symbol" in k or "assignment" in k): gene_col=c; break
+    return id_col,gene_col
+
+
+def split_symbols(value):
+    if pd.isna(value): return []
+    s=str(value).strip()
+    if not s or s.lower() in {"nan","na","none","---","-"}: return []
+    s=re.sub(r"\[[^\]]*\]", " ", s)
+    parts=re.split(r"///|//|;|,|\|",s)
+    out=[]
+    for p in parts:
+        p=p.strip()
+        if not p: continue
+        # Common GEO assignment forms: "1234 // SYMBOL // ..."
+        m=re.search(r"\b([A-Za-z][A-Za-z0-9.-]{1,})\b",p)
+        if m: out.append(m.group(1))
+    return out
+
+
+def normalize_human_id(x):
+    s=str(x).strip().strip('"')
+    if not s or s.lower() in {"nan","na","none"}: return None
+    s=re.sub(r"\.\d+$", "", s)
+    if s.upper().startswith("ENSG"): return s.upper()
+    # Gene symbols are kept in uppercase for cross-platform matching.
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9.-]*",s): return s.upper()
+    return None
+
+
+def map_platform_features(ds, matrix):
+    gpl,_=PLATFORMS[ds]
+    ann=None
+    local=RESULTS/"GSE28688"/"RAW_archive"/"BGX_annotation_sample.csv"
+    if ds=="GSE28688" and local.exists():
+        try: ann=pd.read_csv(local,dtype=str,low_memory=False)
+        except Exception: ann=None
+    if ann is None: ann=read_geo_platform(gpl)
+    if ann is None: return pd.DataFrame(columns=["feature_id","gene_symbol"]),"annotation_unavailable"
+    id_col,gene_col=find_annotation_columns(ann)
+    if id_col is None or gene_col is None: return pd.DataFrame(columns=["feature_id","gene_symbol"]),f"annotation_columns_not_found:{list(ann.columns)[:12]}"
+    pairs=[]
+    lookup={str(k).strip():v for k,v in zip(ann[id_col],ann[gene_col])}
+    for feature in matrix.index:
+        vals=split_symbols(lookup.get(str(feature).strip(),""))
+        for v in vals:
+            sym=normalize_human_id(v)
+            if sym: pairs.append((str(feature),sym))
+    return pd.DataFrame(pairs,columns=["feature_id","gene_symbol"]).drop_duplicates(),"GEO_platform_annotation"
+
+
+def normalize_human_matrix(matrix):
     rows=[]
-    for (ds,b),g in d.groupby(["dataset","trajectory_branch"]):
-        g=g.sort_values("time_hours")
-        for i in range(len(g)-1):
-            a,z=g.iloc[i],g.iloc[i+1]; rows.append({"dataset":ds,"trajectory_branch":b,"time_t":a.time_hours,"time_next":z.time_hours,"dt_hours":z.time_hours-a.time_hours,"latent_1_t":a.common_latent_1,"latent_2_t":a.common_latent_2,"latent_3_t":a.common_latent_3,"latent_1_next":z.common_latent_1,"latent_2_next":z.common_latent_2,"latent_3_next":z.common_latent_3})
-    o=pd.DataFrame(rows); o.to_csv(OUT/"stage9"/"01_next_state_prediction_table.csv",index=False); return o
+    for feature in matrix.index:
+        sym=normalize_human_id(feature)
+        if sym: rows.append((str(feature),sym))
+    return pd.DataFrame(rows,columns=["feature_id","gene_symbol"]).drop_duplicates(),"direct_gene_or_ensembl_id"
+
+
+def biomart_query(xml_text, cache_name):
+    target=CACHE/cache_name
+    if target.exists() and target.stat().st_size>0:
+        return target.read_text(encoding="utf-8",errors="replace")
+    url="https://www.ensembl.org/biomart/martservice?"+urllib.parse.urlencode({"query":xml_text})
+    try:
+        data=urllib.request.urlopen(urllib.request.Request(url,headers={"User-Agent":"DataExploration-Dynamics/5.0"}),timeout=180).read().decode("utf-8",errors="replace")
+        target.write_text(data,encoding="utf-8")
+        return data
+    except Exception as exc:
+        print(f"  BioMart query failed: {exc}")
+        return None
+
+
+def mouse_human_orthologs():
+    xml='''<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE Query><Query virtualSchemaName="default" formatter="TSV" header="1" uniqueRows="1" count="" datasetConfigVersion="0.6"><Dataset name="mmusculus_gene_ensembl" interface="default"><Attribute name="ensembl_gene_id"/><Attribute name="external_gene_name"/><Attribute name="hsapiens_homolog_ensembl_gene"/><Attribute name="hsapiens_homolog_associated_gene_name"/><Attribute name="hsapiens_homolog_orthology_type"/><Attribute name="hsapiens_homolog_orthology_confidence"/></Dataset></Query>'''
+    text=biomart_query(xml,"mouse_human_orthologs.tsv")
+    if not text: return pd.DataFrame()
+    from io import StringIO
+    try:
+        df=pd.read_csv(StringIO(text),sep="\t",dtype=str)
+    except Exception: return pd.DataFrame()
+    df.columns=[str(c).strip() for c in df.columns]
+    return df
+
+
+def stage2_6_biological_harmonization():
+    print("\n"+"="*88)
+    print("STAGE 2.6 — TIME-INDEPENDENT BIOLOGICAL GENE-LEVEL HARMONIZATION")
+    print("="*88)
+    audits=[]; mappings={}; matrices={}
+    for ds,path in FEATURE_FILES.items():
+        if not path.exists():
+            audits.append({"dataset":ds,"source_path":str(path),"status":"missing_matrix","n_features":0,"n_mapped_features":0,"n_unique_genes":0,"mapping_method":"none"}); continue
+        try:
+            matrix=pd.read_csv(path,index_col=0,low_memory=False)
+            matrix=matrix.apply(pd.to_numeric,errors="coerce")
+            matrix=matrix.dropna(axis=0,how="all").dropna(axis=1,how="all")
+        except Exception as exc:
+            audits.append({"dataset":ds,"source_path":str(path),"status":f"read_error:{exc}","n_features":0,"n_mapped_features":0,"n_unique_genes":0,"mapping_method":"none"}); continue
+        matrices[ds]=matrix
+        if ds in PLATFORMS: mp,method=map_platform_features(ds,matrix)
+        else: mp,method=normalize_human_matrix(matrix)
+        mappings[ds]=mp
+        audits.append({"dataset":ds,"source_path":str(path),"status":"mapped" if not mp.empty else "no_features_mapped","n_features":matrix.shape[0],"n_samples":matrix.shape[1],"n_mapped_features":mp.feature_id.nunique() if not mp.empty else 0,"n_unique_genes":mp.gene_symbol.nunique() if not mp.empty else 0,"mapping_method":method})
+        if not mp.empty: mp.to_csv(STAGE26/f"{ds}_feature_to_gene.csv",index=False)
+    audit=pd.DataFrame(audits)
+    audit.to_csv(STAGE26/"01_gene_mapping_audit.csv",index=False)
+
+    mouse_map=mouse_human_orthologs()
+    if not mouse_map.empty:
+        mouse_map.to_csv(STAGE26/"02_mouse_human_ortholog_map.csv",index=False)
+        for ds in ("GSE67462",):
+            if ds not in mappings: continue
+            mp=mappings[ds].copy()
+            mm=mouse_map.copy()
+            mm["mouse_symbol_norm"]=mm["external_gene_name"].map(normalize_human_id)
+            mm["human_symbol_norm"]=mm["hsapiens_homolog_associated_gene_name"].map(normalize_human_id)
+            mm=mm[(mm.mouse_symbol_norm.notna())&(mm.human_symbol_norm.notna())]
+            # Prefer one-to-one orthologues when several records exist.
+            mm["one_to_one"]=(mm["hsapiens_homolog_orthology_type"].astype(str).str.contains("ortholog_one2one",case=False,na=False))
+            mm=mm.sort_values(["mouse_symbol_norm","one_to_one"],ascending=[True,False]).drop_duplicates("mouse_symbol_norm")
+            mp=mp.merge(mm[["mouse_symbol_norm","human_symbol_norm","hsapiens_homolog_orthology_type","hsapiens_homolog_orthology_confidence"]],left_on="gene_symbol",right_on="mouse_symbol_norm",how="left")
+            mp["human_gene_symbol"]=mp["human_symbol_norm"]
+            mappings[ds]=mp
+            mp.to_csv(STAGE26/"GSE67462_feature_to_human_gene.csv",index=False)
+            audit.loc[audit.dataset==ds,"n_mapped_to_human_genes"]=mp.human_gene_symbol.notna().sum()
+            audit.loc[audit.dataset==ds,"orthology_method"]="Ensembl BioMart Compara"
+    else:
+        audit["orthology_method"]="not_available"
+
+    gene_mats={}
+    for ds,matrix in matrices.items():
+        mp=mappings.get(ds,pd.DataFrame())
+        if mp.empty: continue
+        target_col="human_gene_symbol" if ds=="GSE67462" and "human_gene_symbol" in mp.columns else "gene_symbol"
+        mp=mp[mp[target_col].notna()].copy()
+        mp[target_col]=mp[target_col].map(normalize_human_id)
+        mp=mp[mp[target_col].notna()]
+        if mp.empty: continue
+        sample_cols=[c for c in matrix.columns if c not in {"gene_symbol","feature_id"}]
+        pieces=[]
+        for gene,grp in mp.groupby(target_col):
+            feats=[f for f in grp.feature_id.unique() if f in matrix.index]
+            if not feats: continue
+            v=matrix.loc[feats,sample_cols].mean(axis=0)
+            v.name=gene; pieces.append(v)
+        if pieces:
+            gm=pd.DataFrame(pieces)
+            gm=gm.groupby(level=0).mean()
+            # Within-dataset gene standardization removes platform-scale differences while retaining sample ordering.
+            gm=gm.sub(gm.mean(axis=1),axis=0).div(gm.std(axis=1,ddof=0).replace(0,np.nan),axis=0)
+            gm=gm.dropna(how="all")
+            gene_mats[ds]=gm
+            gm.to_csv(STAGE26/f"{ds}_human_gene_zmatrix.csv")
+
+    if len(gene_mats)>=2:
+        common=set.intersection(*(set(x.index) for x in gene_mats.values()))
+    else: common=set()
+    common=sorted(common)
+    if common:
+        blocks=[]
+        meta=[]
+        for ds in sorted(gene_mats):
+            x=gene_mats[ds].loc[common]
+            blocks.append(x)
+            for sample in x.columns: meta.append({"sample":str(sample),"dataset":ds,"feature_space":"human_gene_zscore","time_hours":time_hours(ds,sample),"condition":condition(ds,sample)})
+        common_matrix=pd.concat(blocks,axis=1)
+        common_matrix.to_csv(STAGE26/"06_common_human_gene_matrix.csv")
+        pd.DataFrame(meta).to_csv(STAGE26/"07_common_gene_sample_metadata.csv",index=False)
+    else:
+        common_matrix=pd.DataFrame()
+
+    overlap_rows=[]
+    for i,a in enumerate(sorted(gene_mats)):
+        for b in sorted(gene_mats)[i+1:]:
+            overlap_rows.append({"dataset_a":a,"dataset_b":b,"n_genes_a":len(gene_mats[a]),"n_genes_b":len(gene_mats[b]),"common_human_genes":len(set(gene_mats[a]).intersection(gene_mats[b]))})
+    pd.DataFrame(overlap_rows).to_csv(STAGE26/"05_pairwise_human_gene_overlap.csv",index=False)
+
+    decision=pd.DataFrame([{
+        "stage":"2.6",
+        "n_datasets_with_gene_matrix":len(gene_mats),
+        "n_common_human_genes":len(common),
+        "n_common_samples":common_matrix.shape[1] if not common_matrix.empty else 0,
+        "status":"ready_for_biological_state_space" if len(common)>=500 else "insufficient_common_gene_space",
+        "time_used_to_build_feature_space":False,
+        "cross_species_mapping":"Ensembl BioMart Compara" if not mouse_map.empty else "unavailable",
+        "scRNA_representation":"sample_pseudobulk_from_GSE297234.py",
+        "platform_mapping":"GEO GPL annotation",
+    }])
+    decision.to_csv(STAGE26/"08_stage26_decision.csv",index=False)
+
+    print(audit.to_string(index=False))
+    print(f"common human genes = {len(common):,}")
+    print(f"datasets contributing to common space = {len(gene_mats)}")
+    print("time used to construct feature space = False")
+    print("status = " + decision.iloc[0].status)
+    return decision.iloc[0], common_matrix, audit
+
+
+def downstream_diagnostics(state):
+    # These stages remain explicitly diagnostic; they do not replace biological validation.
+    traj=state[state.time_hours.notna()].copy()
+    if traj.empty: return
+    rows=[]
+    for ds,g in traj.groupby("dataset"):
+        t=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
+        if len(t)<2: continue
+        dif=np.diff(t.to_numpy(float),axis=0); speed=np.linalg.norm(dif,axis=1)
+        rows.append({"dataset":ds,"n_timepoints":len(t),"path_length":float(speed.sum()),"mean_step":float(speed.mean()),"max_step":float(speed.max())})
+    pd.DataFrame(rows).to_csv(OUT/"stage3"/"01_trajectory_metrics.csv",index=False)
+
+    stab=[]
+    for ds,g in traj.groupby("dataset"):
+        t=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
+        if len(t)<3: continue
+        speed=np.linalg.norm(np.diff(t.to_numpy(float),axis=0),axis=1)
+        stab.append({"dataset":ds,"mean_step":speed.mean(),"step_cv":speed.std(ddof=0)/(speed.mean()+1e-12),"early_step":speed[0],"late_step":speed[-1]})
+    pd.DataFrame(stab).to_csv(OUT/"stage4"/"01_dynamics_stability_diagnostics.csv",index=False)
+
+    pred=[]
+    for ds,g in traj.groupby("dataset"):
+        t=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
+        if len(t)<3: continue
+        u=t.index.to_numpy(float)
+        for j in range(3):
+            coef=np.polyfit(u,t.iloc[:,j].to_numpy(float),min(2,len(t)-1))
+            fit=np.polyval(coef,u)
+            pred.append({"dataset":ds,"axis":j+1,"rmse_polynomial":float(np.sqrt(np.mean((fit-t.iloc[:,j])**2)))})
+    pd.DataFrame(pred).to_csv(OUT/"stage5"/"01_low_order_dynamics_fit.csv",index=False)
+
+    sym=[]
+    for ds,g in traj.groupby("dataset"):
+        t=g.groupby("time_hours")[["latent_1","latent_2","latent_3"]].mean().sort_index()
+        if len(t)<3: continue
+        tt=t.index.to_numpy(float); z=t.to_numpy(float)
+        dz=np.gradient(z,tt,axis=0)
+        for j in range(3):
+            coef=np.polyfit(z[:,j],dz[:,j],1)
+            fit=np.polyval(coef,z[:,j])
+            sym.append({"dataset":ds,"state_axis":j+1,"equation":"dz/dt = a*z + b","a":coef[0],"b":coef[1],"fit_rmse":float(np.sqrt(np.mean((fit-dz[:,j])**2)))})
+    pd.DataFrame(sym).to_csv(OUT/"stage6"/"01_symbolic_linear_diagnostics.csv",index=False)
+    pd.DataFrame([{"dataset":d} for d in sorted(traj.dataset.unique())]).to_csv(OUT/"stage7"/"01_held_out_dataset_inventory.csv",index=False)
+    reg=[]
+    peak_report=RESULTS/"GSE67520"/"01_sample_metadata.csv"
+    if peak_report.exists():
+        reg=pd.read_csv(peak_report).to_dict("records")
+    pd.DataFrame(reg).to_csv(OUT/"stage8"/"01_regulatory_context.csv",index=False)
+    pairs=[]
+    ds=sorted(traj.dataset.unique())
+    for i,a in enumerate(ds):
+        for b in ds[i+1:]: pairs.append({"dataset_a":a,"dataset_b":b,"available_for_prediction_comparison":True})
+    pd.DataFrame(pairs).to_csv(OUT/"stage9"/"01_prediction_pairs.csv",index=False)
+
+
 def main():
-    st,av=stage1_data_integration(); st=stage2_1_common_latent_state(st); stage2_2_validate_common_latent(st); st,_=stage2_3_within_time_residual_validation(st); o24=stage2_4_out_of_sample_validation(st); stage2_5_biological_feature_harmonization(st); tr=stage3_trajectory_reconstruction(st); dy=stage4_dynamics(tr); dy=stage5_critical_transitions(dy); s=stage6_symbolic_equation_discovery(dy); h=stage7_heldout_validation(dy); r=stage8_regulatory_integration(dy); p=stage9_predictive_ai(dy)
-    print(f"\nDynamics v4.8 results written to: {OUT}"); print(f"Datasets with PCA: {int(av.PCA_file_found.sum())}/{len(av)}"); print(f"Stage 2.1 aligned trajectory datasets: {st[st.common_latent_status=='time_anchored_aligned'].dataset.nunique()}"); print(f"Stage 2.4 tested OOS rows: {len(o24)}"); print(f"Stage 2.5 candidate matrices: {len(pd.read_csv(STAGE25/'01_feature_harmonization_audit.csv').query('candidate_matrix == True'))}"); print(f"Trajectory timepoints: {len(tr)}"); print(f"Stage 6 symbolic rows: {len(s)}"); print(f"Stage 7 held-out datasets: {len(h)}"); print(f"Stage 8 regulatory rows: {len(r)}"); print(f"Stage 9 prediction pairs: {len(p)}")
-if __name__=="__main__":main()
+    state, availability=stage1_data_integration()
+    aligned=stage2_1(state)
+    stage2_2(aligned)
+    validated=stage2_3(aligned)
+    oos=stage2_4(aligned)
+    decision, common_matrix, audit=stage2_6_biological_harmonization()
+    downstream_diagnostics(aligned)
+    print("\n"+"="*88)
+    print(f"Dynamics v5.0 results written to: {OUT}")
+    print(f"Datasets with PCA: {int(availability.PCA_file_found.sum()) if not availability.empty else 0}/5")
+    print(f"Stage 2.1 aligned trajectory datasets: {aligned[aligned.common_latent_status == 'time_anchored_aligned'].dataset.nunique() if not aligned.empty else 0}")
+    print(f"Stage 2.4 tested OOS rows: {len(oos)}")
+    print(f"Stage 2.6 common human genes: {decision['n_common_human_genes']}")
+    print(f"Stage 2.6 status: {decision['status']}")
+    print(f"Trajectory timepoints: {aligned[aligned.time_hours.notna()].time_hours.nunique() if not aligned.empty else 0}")
+    print("="*88)
+
+
+if __name__ == "__main__":
+    main()
