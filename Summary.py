@@ -8,58 +8,11 @@ OUT = RESULTS / "SUMMARY"
 OUT.mkdir(parents=True, exist_ok=True)
 
 DATASETS = {
-    "GSE148158": {
-        "title": "A PIANO (Proper, Insufficient, Aberrant, and NO reprogramming) response to the Yamanaka factors in the initial stages of human iPSC reprogramming",
-        "type": "RNA-seq / expression profiling by high-throughput sequencing",
-        "platform": "GPL16791 - Illumina HiSeq 2500",
-        "samples": 13,
-        "description": "Human BJ fibroblasts, hESC controls, GFP controls and cells undergoing OSKM reprogramming. The dataset describes early transcriptional responses during induced pluripotency.",
-        "interpretation": "This dataset is useful for examining how global gene-expression profiles change from fibroblast and control states toward early OSKM reprogramming states. The supplied input is already GEO-normalized expression data; log2(x+1) is used only as an exploratory transformation for distributions, variance and PCA.",
-    },
-    "GSE28688": {
-        "title": "Molecular insights into induced pluripotency mediated by the OCT4, SOX2, KLF and c-MYC gene regulatory network",
-        "type": "Expression profiling by array",
-        "platform": "GPL6883 - Illumina HumanRef-8 v3.0 expression beadchip",
-        "samples": 14,
-        "description": "Human HFF1 fibroblasts measured before and 24, 48 and 72 hours after OSKM transduction, together with H1/H9 hESC controls and iPS2/iPS4 samples.",
-        "interpretation": "This dataset allows exploration of the temporal transcriptional response after reprogramming-factor transduction and comparison with established pluripotent states. Replicate pairs make within-group consistency particularly useful to inspect.",
-    },
-    "GSE52052": {
-        "title": "Comparison of gene expression at day 11 of iPSC reprogramming with different reprogramming cocktails",
-        "type": "Expression profiling by array",
-        "platform": "GPL14550 - Agilent-028004 SurePrint G3 Human GE 8x60K Microarray",
-        "samples": 6,
-        "description": "Day-11 reprogramming samples generated with OSK, OSK+let-7 inhibitor, OSKM or OSK+LIN-41, plus a GFP control and H1 hESC reference.",
-        "interpretation": "This dataset compares global expression at the same reprogramming time point under different molecular cocktails. It is useful for visualizing how the experimental conditions relate transcriptionally, but most conditions have only one sample.",
-    },
-}
-
-GROUPS = {
-    "GSE148158": {
-        "BJ_2 [re-analysis]": "BJ_fibroblast", "BJ_1 [re-analysis]": "BJ_fibroblast",
-        "BJ_3 [re-analysis]": "BJ_fibroblast", "BJ_4 [re-analysis]": "BJ_fibroblast",
-        "H1_2 [re-analysis]": "hESC", "H9 [re-analysis]": "hESC", "H1 [re-analysis]": "hESC",
-        "BJ_GFP48": "GFP_48h", "BJ_GFP48b": "GFP_48h",
-        "BJ_GFP72": "GFP_72h", "BJ_GFP72b": "GFP_72h",
-        "OSKM48": "OSKM_48h", "OSKM72": "OSKM_72h",
-    },
-    "GSE28688": {
-        "HFF1-a": "HFF1", "HFF1-b": "HFF1",
-        "HFF1-24 h post-transduction-a": "24h", "HFF1-24 h post-transduction-b": "24h",
-        "HFF1-48 h post-transduction-a": "48h", "HFF1-48 h post-transduction-b": "48h",
-        "HFF1-72 h post-transduction-a": "72h", "HFF1-72 h post-transduction-b": "72h",
-        "H1": "H1_hESC", "H9": "H9_hESC",
-        "iPS2 from HFF1-a": "iPS2", "iPS2 from HFF1-b": "iPS2",
-        "iPS4 from HFF1-a": "iPS4", "iPS4 from HFF1-b": "iPS4",
-    },
-    "GSE52052": {
-        "HDF_GFP(+)_day11": "GFP_control",
-        "HDF_OSK+control_inh_TRA(+)_day11": "OSK_control_inhibitor",
-        "HDF_OSK+let-7_inh_TRA(+)_day11": "OSK_let7_inhibitor",
-        "HDF_OSKM_TRA(+)_day11": "OSKM",
-        "HDF_OSK+LIN-41_TRA(+)_day11": "OSK_LIN41",
-        "H1_hESC": "H1_hESC",
-    },
+    "GSE148158": ("A PIANO (Proper, Insufficient, Aberrant, and NO reprogramming) response to the Yamanaka factors in the initial stages of human iPSC reprogramming", "Human; RNA-seq / high-throughput sequencing", "GPL16791 - Illumina HiSeq 2500", 13, "Very early human OSKM transcriptional response; BJ fibroblasts, hESC and GFP controls."),
+    "GSE28688": ("Molecular insights into induced pluripotency mediated by the OCT4, SOX2, KLF and c-MYC gene regulatory network", "Human; expression profiling by array", "GPL6883 - Illumina HumanRef-8 v3.0", 14, "Early human time course: fibroblasts, 24/48/72 h after OSKM transduction, hESC and iPS controls."),
+    "GSE52052": ("Comparison of gene expression at day 11 of iPSC reprogramming with different reprogramming cocktails", "Human; expression profiling by array", "GPL14550 - Agilent-028004 SurePrint G3 Human GE 8x60K", 6, "Day-11 comparison of GFP control, OSK-based cocktails, OSKM and H1 hESC."),
+    "GSE67462": ("Expression data from OSKM-mediated 2nd reprogramming cells and the corresponding iPS cell line", "Mouse; expression profiling by array; time series", "GPL19972 - Affymetrix Mouse Gene 1.0 ST Array", 18, "Second reprogramming sampled at day 0, 1, 3, 5, 7, 11, 15, 18 and iPSC, with two replicates per stage."),
+    "GSE67520": ("Oct4 binding and Histone modification profiling during OSKM-mediated 2nd reprogramming", "Mouse; ChIP-seq / genome binding and occupancy profiling", "GPL13112 - Illumina HiSeq 2000; GPL17021 - Illumina HiSeq 2500", 71, "Regulatory dataset profiling Oct4, histone modifications, RNAPII and input controls during second reprogramming."),
 }
 
 
@@ -72,90 +25,52 @@ def read_csv(path, index_col=0):
         return None
 
 
-def fmt(value, digits=3):
-    if value is None or (isinstance(value, float) and not np.isfinite(value)):
+def fmt(x):
+    try:
+        return f"{float(x):.3f}"
+    except (TypeError, ValueError):
         return "n/a"
-    return f"{value:.{digits}f}"
 
 
-def group_for_sample(dataset, sample):
-    """Match exact names as well as GEO-prefixed/local variants."""
-    sample = str(sample).strip()
-    mapping = GROUPS[dataset]
-    if sample in mapping:
-        return mapping[sample]
-    for name, group in mapping.items():
-        if sample.endswith(name) or name in sample:
-            return group
-    return "unclassified"
-
-
-def summarize_dataset(name):
-    d = DATASETS[name]
+def expression_section(name, lines):
     folder = RESULTS / name
-    lines = []
-    lines.append(name)
-    lines.append("=" * len(name))
-    lines.append(f"Title: {d['title']}")
-    lines.append(f"Experiment: {d['type']}")
-    lines.append(f"Platform: {d['platform']}")
-    lines.append(f"Expected samples from GEO design: {d['samples']}")
-    lines.append(f"What the data represent: {d['description']}")
-    lines.append(f"Why this dataset matters: {d['interpretation']}")
-    lines.append("")
-
-    if not folder.exists():
-        lines.append("RESULTS NOT FOUND: run the corresponding exploration script first.")
-        return lines
-
     meta = read_csv(folder / "01_sample_metadata.csv", index_col=None)
     qc = read_csv(folder / "03_sample_QC.csv")
     corr = read_csv(folder / "04_sample_correlation.csv")
     var = read_csv(folder / "06_feature_variance.csv")
     pca = read_csv(folder / "07_PCA_coordinates.csv")
 
-    lines.append("Exploration performed")
-    lines.append("----------------------")
-    lines.append("- Distribution check: boxplot of expression values per sample.")
-    lines.append("- Sample QC: mean, median, standard deviation, minimum, maximum and missing values.")
-    lines.append("- Sample correlation: Pearson correlation between complete sample expression profiles.")
-    lines.append("- Variability: ranking features by variance after log2(x+1).")
-    lines.append("- PCA: dimensionality reduction using the most variable features.")
-    lines.append("- Top-variable feature heatmap: standardized patterns across samples.")
+    lines += ["Exploration performed", "----------------------",
+              "- Expression distributions / boxplot.",
+              "- Per-sample QC: mean, median, SD and missing values.",
+              "- Pearson sample correlation.",
+              "- Feature variance ranking.",
+              "- PCA using the most variable features.",
+              "- Heatmap of top variable features."]
     if name == "GSE148158":
-        lines.append("- No additional raw-count normalization was performed because the supplied matrix is already GEO-normalized.")
+        lines.append("- Supplied matrix is GEO-normalized; no raw-count normalization was added.")
     elif name == "GSE28688":
-        lines.append("- The non-normalized GEO matrix was transformed with log2(x+1); exploratory quantile normalization was then used for comparative visualization.")
-        lines.append("- The accompanying RAW archive was inspected separately as platform/probe annotation data.")
+        lines += ["- Non-normalized matrix was transformed with log2(x+1).",
+                  "- Exploratory quantile normalization was used for visualization.",
+                  "- RAW archive was identified as GPL6883 BGX probe annotation rather than expression data."]
     elif name == "GSE52052":
-        lines.append("- The RAW Agilent files were parsed using the processed gProcessedSignal values and non-control probes; the script also creates an exploratory quantile-normalized matrix.")
-        lines.append("- GEO reports that the original signals were processed in GeneSpring GX and normalized to percentile, so the exploratory quantile normalization is not presented as a replacement for GEO processing.")
+        lines += ["- Agilent RAW files were parsed using gProcessedSignal and non-control probes.",
+                  "- Exploratory quantile normalization was generated; this does not replace GEO/GeneSpring processing."]
+    elif name == "GSE67462":
+        lines += ["- Processed expression values were read from the GEO Series Matrix.",
+                  "- RAW archive contains 18 Affymetrix CEL files and was inventoried separately."]
     lines.append("")
 
     if meta is not None and "group" in meta.columns:
-        sample_col = None
-        for candidate in ["sample", "Sample", "sample_name", "Sample_Name", "name"]:
-            if candidate in meta.columns:
-                sample_col = candidate
-                break
-        if sample_col is not None:
-            resolved = meta[sample_col].map(lambda x: group_for_sample(name, x))
-            meta["group"] = resolved
-        else:
-            meta["group"] = meta["group"].map(lambda x: group_for_sample(name, x) if x == "unclassified" else x)
-
-        counts = meta["group"].value_counts().sort_index()
-        lines.append("Sample groups observed")
-        lines.append("----------------------")
-        for group, count in counts.items():
-            lines.append(f"- {group}: {count} sample(s)")
+        counts = meta["group"].fillna("unclassified").astype(str).value_counts().sort_index()
+        lines += ["Sample groups observed", "----------------------"]
+        lines += [f"- {g}: {n} sample(s)" for g, n in counts.items()]
         if "unclassified" in counts.index:
-            lines.append("- Unclassified samples mean that the local sample name did not match the GEO-derived metadata mapping; this should be checked before interpreting group-level plots.")
+            lines.append("- Unclassified samples should be checked before interpreting group-level plots.")
         lines.append("")
 
     if qc is not None and not qc.empty:
-        lines.append("QC summary")
-        lines.append("----------")
+        lines += ["QC summary", "----------"]
         if "missing" in qc.columns:
             lines.append(f"- Maximum missing values in one sample: {int(qc['missing'].max())}")
         if "mean" in qc.columns:
@@ -165,95 +80,115 @@ def summarize_dataset(name):
         lines.append("")
 
     if corr is not None and not corr.empty:
-        numeric = corr.apply(pd.to_numeric, errors="coerce")
-        vals = numeric.to_numpy(dtype=float)
-        if vals.ndim == 2 and vals.shape[0] == vals.shape[1]:
-            off_diag = vals[~np.eye(vals.shape[0], dtype=bool)]
-            off_diag = off_diag[np.isfinite(off_diag)]
-            if len(off_diag):
-                lines.append("Correlation summary")
-                lines.append("-------------------")
-                lines.append(f"- Pearson r between different samples: min {fmt(off_diag.min())}, median {fmt(np.median(off_diag))}, max {fmt(off_diag.max())}")
-                lines.append("- High correlation means that whole-sample expression profiles are similar; lower correlation means stronger global differences, which may reflect biology, technical effects or both.")
-                lines.append("")
+        a = corr.apply(pd.to_numeric, errors="coerce").to_numpy(float)
+        if a.ndim == 2 and a.shape[0] == a.shape[1]:
+            x = a[~np.eye(a.shape[0], dtype=bool)]
+            x = x[np.isfinite(x)]
+            if len(x):
+                lines += ["Correlation summary", "-------------------",
+                          f"- Pearson r between different samples: min {fmt(x.min())}, median {fmt(np.median(x))}, max {fmt(x.max())}",
+                          "- Higher correlation indicates greater similarity of whole-sample expression profiles.", ""]
 
     if var is not None and not var.empty:
-        variance_col = var.columns[0]
-        vv = pd.to_numeric(var[variance_col], errors="coerce").dropna()
-        if len(vv):
-            lines.append("Feature variability")
-            lines.append("-------------------")
-            lines.append(f"- Features ranked by variance: {len(vv):,}")
-            lines.append(f"- Highest observed variance: {fmt(vv.iloc[0])}")
-            if len(vv) >= 10:
-                lines.append("- The highest-variance features contribute most strongly to the visible sample differences and therefore to PCA structure.")
-            lines.append("")
+        col = "variance" if "variance" in var.columns else var.columns[0]
+        x = pd.to_numeric(var[col], errors="coerce").dropna()
+        if len(x):
+            lines += ["Feature variability", "-------------------",
+                      f"- Features ranked by variance: {len(x):,}",
+                      f"- Highest observed variance: {fmt(x.iloc[0])}", ""]
 
     if pca is not None and not pca.empty and "PC1" in pca.columns:
-        lines.append("PCA interpretation")
-        lines.append("------------------")
-        if "PC2" in pca.columns:
-            lines.append("- PC1 and PC2 summarize major axes of variation among samples.")
+        lines += ["PCA interpretation", "------------------",
+                  "- PC1 and PC2 summarize major axes of variation among samples."]
         if "group" in pca.columns:
-            group_values = pca["group"].map(lambda x: group_for_sample(name, x) if x == "unclassified" else x)
-            group_counts = group_values.value_counts()
-            singleton = int((group_counts == 1).sum())
-            if singleton:
-                lines.append(f"- {singleton} group(s) contain only one sample; separation of those groups is descriptive rather than evidence of reproducibility.")
-        lines.append("- Samples that cluster together have more similar global expression patterns; separated samples have larger overall expression differences.")
-        lines.append("")
+            gc = pca["group"].fillna("unclassified").astype(str).value_counts()
+            singletons = int((gc == 1).sum())
+            if singletons:
+                lines.append(f"- {singletons} group(s) contain only one sample; separation is descriptive rather than evidence of reproducibility.")
+        lines += ["- PCA separation can reflect biology, technical effects or both.", ""]
 
-    lines.append("Important interpretation limits")
-    lines.append("-------------------------------")
-    lines.append("- These scripts perform exploratory data analysis, not differential-expression testing.")
-    lines.append("- A visible PCA separation does not by itself prove a biological mechanism or statistical significance.")
-    lines.append("- Correlation, PCA and clustering describe global expression structure and can be influenced by technical effects as well as biology.")
-    if name == "GSE52052":
-        lines.append("- GSE52052 has one sample for each main reprogramming condition, so condition-level conclusions are descriptive and cannot provide replicate-based estimates.")
+    lines += ["Important interpretation limits", "-------------------------------",
+              "- These scripts perform exploratory data analysis, not differential-expression testing.",
+              "- PCA, correlation and clustering do not by themselves prove mechanism or statistical significance."]
     if name == "GSE148158":
-        lines.append("- GSE148158 contains singleton OSKM time points; these are useful for visualization but do not provide replicate-based estimates at those exact time points.")
+        lines.append("- OSKM 48 h and 72 h are singleton conditions, so replicate-based inference at those exact time points is not possible.")
     if name == "GSE28688":
-        lines.append("- GSE28688 has replicate pairs for HFF1, the 24/48/72 h time points and the iPS groups, which supports inspection of within-group consistency.")
+        lines.append("- Replicate pairs support inspection of within-group consistency.")
+    if name == "GSE52052":
+        lines.append("- Most conditions have one sample, so condition-level conclusions are descriptive.")
+    if name == "GSE67462":
+        lines.append("- Two replicates are available at each reprogramming stage, making this dataset suitable for later replicate-aware time-course analysis.")
+    lines.append("")
 
-    return lines
+
+def chipseq_section(lines):
+    folder = RESULTS / "GSE67520"
+    inv = read_csv(folder / "01_RAW_file_inventory.csv", index_col=None)
+    peaks = read_csv(folder / "06_peak_summary_sorted.csv", index_col=None)
+    if peaks is None:
+        peaks = read_csv(folder / "02_peak_summary.csv", index_col=None)
+
+    lines += ["Exploration performed", "----------------------",
+              "- RAW archive inventory with experimental mark and reprogramming stage.",
+              "- BED/BROADPEAK genomic interval parsing.",
+              "- Peak counts, lengths, chromosome counts and covered base pairs.",
+              "- Peak counts by stage and chromatin mark, including stage dynamics.",
+              "- No differential peak calling was performed.", ""]
+    if inv is not None and not inv.empty:
+        lines += ["RAW archive summary", "-------------------", f"- Files inventoried: {len(inv)}"]
+        if "mark" in inv.columns:
+            c = inv["mark"].fillna("unknown").value_counts().sort_index()
+            lines.append("- Categories: " + ", ".join(f"{k} ({v})" for k, v in c.items()))
+        lines.append("")
+    if peaks is not None and not peaks.empty:
+        lines += ["Peak summary", "------------", f"- Parsed peak files: {len(peaks)}"]
+        if "peaks" in peaks.columns:
+            total = pd.to_numeric(peaks["peaks"], errors="coerce").fillna(0).sum()
+            lines.append(f"- Total parsed peaks across files: {int(total):,}")
+        if "mark" in peaks.columns:
+            lines.append("- Marks observed: " + ", ".join(sorted(peaks["mark"].dropna().astype(str).unique())))
+        if "stage" in peaks.columns:
+            order = [f"day{x}" for x in [0, 1, 3, 5, 7, 11, 15, 18]] + ["iPSC"]
+            observed = set(peaks["stage"].astype(str))
+            lines.append("- Stages observed: " + ", ".join(s for s in order if s in observed))
+        lines.append("")
+    lines += ["Important interpretation limits", "-------------------------------",
+              "- GSE67520 is not a gene-expression dataset; ChIP-seq peaks represent genomic regions enriched for the assayed factor or mark.",
+              "- More peaks does not directly mean higher gene expression.",
+              "- Interpretation should consider peak location, signal, controls and genomic annotation.",
+              "- Differential binding and causal regulatory analysis are outside the current EDA.", ""]
 
 
-all_lines = [
-    "SUMMARY OF THE THREE GENE-EXPRESSION EXPLORATIONS",
-    "=" * 48,
-    "",
-    "Purpose",
-    "-------",
-    "This report explains what the three GEO datasets contain and what was obtained from the exploratory scripts. The analysis focuses on data quality, sample similarity, variability and global structure of the expression data.",
-    "",
-    "How to read the results",
-    "------------------------",
-    "Boxplots show the distribution of expression values in each sample. QC tables quantify basic sample characteristics and missing values. Correlation matrices show how similar whole-sample expression profiles are. Variance tables identify features that vary most across samples. PCA reduces thousands of measurements to a few axes so that major sample relationships can be visualized. Heatmaps show expression patterns of the most variable features.",
-    "",
-    "Important distinction between the datasets",
-    "--------------------------------------------",
-    "These datasets should be interpreted primarily within their own experiments, not by comparing raw expression values between datasets. GSE148158 is an RNA-seq-derived dataset with a supplied matrix of GEO-normalized expression values. GSE28688 is an Illumina microarray experiment, and GSE52052 is an Agilent microarray experiment. Different technologies, preprocessing procedures and value scales mean that an expression value or correlation observed in one dataset is not directly equivalent to the same number in another dataset.",
-    "",
-    "The analyses therefore ask the same general questions separately within each dataset: Are samples internally consistent? Which samples have similar global expression profiles? Which features vary most? Does the experimental structure appear in PCA or correlation patterns?",
-    "",
+lines = [
+    "SUMMARY OF THE FIVE GEO DATASET EXPLORATIONS",
+    "=============================================", "",
+    "Purpose", "-------",
+    "This report summarizes the five GEO datasets currently included in the project. Four datasets provide gene-expression measurements and one provides ChIP-seq regulatory information.", "",
+    "How to read the results", "------------------------",
+    "Expression boxplots show distributions; QC tables summarize sample characteristics; correlation matrices show whole-sample similarity; variance tables identify variable features; PCA summarizes major axes of variation; heatmaps show patterns among the most variable features.", "",
+    "GSE67520 is different: it contains ChIP-seq peak calls rather than expression values, so its exploration focuses on genomic enrichment and changes across stages and chromatin marks.", "",
+    "Important distinction between datasets", "--------------------------------------------",
+    "Expression values should be interpreted primarily within each experiment. GSE148158 is RNA-seq-derived; GSE28688 and GSE52052 are human microarrays; GSE67462 is a mouse Affymetrix microarray. Different technologies, species, preprocessing and value scales make raw numeric expression values from different datasets non-equivalent.", "",
+    "GSE67520 is complementary rather than directly comparable: it provides regulatory information about Oct4 binding, histone modifications and RNAPII. Integration should therefore use genomic annotation and biological hypotheses rather than compare peak counts with expression values.", "",
 ]
 
-for name in DATASETS:
-    all_lines.extend(summarize_dataset(name))
-    all_lines.append("")
+for name, (title, experiment, platform, samples, description) in DATASETS.items():
+    lines += [name, "=" * len(name), f"Title: {title}", f"Experiment: {experiment}", f"Platform: {platform}", f"Expected samples from GEO design: {samples}", f"What the data represent: {description}", ""]
+    folder = RESULTS / name
+    if not folder.exists():
+        lines += ["RESULTS NOT FOUND: run the corresponding exploration script first.", ""]
+    elif name == "GSE67520":
+        chipseq_section(lines)
+    else:
+        expression_section(name, lines)
 
-all_lines.extend([
-    "Overall conclusion",
-    "==================",
-    "Together, the three explorations provide complementary views of early human iPSC reprogramming. GSE148158 emphasizes early transcriptional responses associated with OSKM reprogramming, GSE28688 provides a time-course from fibroblast cells through 24, 48 and 72 hours after transduction together with pluripotent controls, and GSE52052 compares different reprogramming cocktails at day 11.",
-    "",
-    "The main output of the current project is a quality-controlled exploratory picture of global expression structure: which samples are similar, which are separated, which features are most variable, and whether the experimental grouping is visible in PCA and correlation patterns. These results are a foundation for later statistical analyses; they are not, by themselves, evidence of differential expression, mechanism or causality.",
-    "",
-    "For formal biological conclusions, the next stage would require appropriately defined contrasts, replicate-aware statistical testing and, where appropriate, correction for multiple testing. The present scripts intentionally stop at exploratory analysis.",
-])
+lines += ["Overall conclusion", "==================",
+          "The five datasets now provide complementary views of cellular reprogramming at transcriptional and regulatory levels: very early human responses (GSE148158), an early human time course (GSE28688), day-11 cocktail comparison (GSE52052), a longer mouse second-reprogramming trajectory (GSE67462), and ChIP-seq regulatory profiling (GSE67520).", "",
+          "The current project provides an exploratory foundation for quality control, hypothesis generation and identification of candidate biological transitions. These outputs are not by themselves evidence of differential expression, differential binding, mechanism or causality.", "",
+          "The next stage should use replicate-aware statistical testing and multiple-testing correction. GSE67462 is particularly suitable for time-course modeling. GSE67520 can later be extended with differential binding and genomic annotation so regulatory findings can be connected to expression changes. Cross-dataset integration must account for species, platform, preprocessing and experimental design.", "",
+          "Raw archives that are too large for GitHub remain local; the analysis scripts and lightweight result summaries are the reproducible project components."]
 
-text = "\n".join(all_lines) + "\n"
+text = "\n".join(lines) + "\n"
 (OUT / "Summary.txt").write_text(text, encoding="utf-8")
-
 print(text)
 print(f"Summary saved to: {OUT / 'Summary.txt'}")
