@@ -1,6 +1,6 @@
 """Dynamics v4.5: OSKM reprogramming dynamics pipeline.
 
-Stage 2.3 now treats GSE148158 as a branched trajectory: GFP and OSKM are
+Stage 2.3 treats GSE148158 as a branched trajectory: GFP and OSKM are
 separate biological conditions and are never treated as replicate samples.
 Stage 5 safely skips rolling critical-transition statistics when too few time
 points are available. Stages 6-9 remain preparation layers.
@@ -43,7 +43,7 @@ def condition(ds,s):
         if "h1" in s or "h9" in s:return "hESC"
         if "bj" in s:return "BJ_fibroblast"
     if ds=="GSE297234":
-        return "aged" if "6586" in s or "6587" in s or "6588" in s or "6589" in s else ("young" if "659" in s else "unknown")
+        return "aged" if any(x in s for x in ("6586","6587","6588","6589")) else ("young" if any(x in s for x in ("6590","6591","6592","6593")) else "unknown")
     return "all"
 
 def replicate(s):
@@ -72,9 +72,9 @@ def stage1_data_integration():
         if x is None:rows.append({"dataset":ds,"PCA_file_found":False,"n_samples":0,"n_timed_samples":0,"n_unique_times":0,"role":"unavailable","timing_source":"none","path":str(path)});continue
         o=x.copy();o.insert(0,"sample",o.index.astype(str));source="GSM_or_text"
         if ds=="GSE28688" and len(o)==14:o["sample"]=GSE28688_ROW_SAMPLE;source="GSE28688_GEO_row_order"
-        o["dataset"]=ds;o["time_hours"]=[time_hours(ds,s) for s in o.sample]
+        o["dataset"]=ds;o["time_hours"]=[time_hours(ds,s) for s in o["sample"]]
         if ds=="GSE28688" and source=="GSE28688_GEO_row_order":o["time_hours"]=GSE28688_ROW_TIME
-        o["condition"]=[condition(ds,s) for s in o.sample];o["stage"]=o.time_hours.map(lambda t:f"day{int(t/24)}" if pd.notna(t) and t%24==0 else (f"{int(t)}h" if pd.notna(t) else "unknown"));o["replicate"]=[replicate(s) for s in o.sample];o["timing_source"]=source
+        o["condition"]=[condition(ds,s) for s in o["sample"]];o["stage"]=o["time_hours"].map(lambda t:f"day{int(t/24)}" if pd.notna(t) and t%24==0 else (f"{int(t)}h" if pd.notna(t) else "unknown"));o["replicate"]=[replicate(s) for s in o["sample"]];o["timing_source"]=source
         for i,pc in enumerate(["PC1","PC2","PC3"],1):o[f"latent_{i}"]=zscore(orient(o[pc]))
         timed=o[o.time_hours.notna()];role="trajectory" if timed.time_hours.nunique()>=2 else "context_only"
         rows.append({"dataset":ds,"PCA_file_found":True,"n_samples":len(o),"n_timed_samples":len(timed),"n_unique_times":timed.time_hours.nunique(),"role":role,"timing_source":source,"path":str(path)});states.append(o)
@@ -97,7 +97,7 @@ def stage2_1_common_latent_state(st):
         a=(c-c.mean(0))@_rot(c,r);a*=np.divide(np.std(r,0),np.where(np.std(a,0)>0,np.std(a,0),1));a+=r.mean(0);aligned[d]=a
     rows=[]
     for d,a in aligned.items():
-        g=st[(st.dataset==d)&st.time_hours.notna()];
+        g=st[(st.dataset==d)&st.time_hours.notna()]
         for t,n in g.groupby("time_hours").size().items():
             u=(t-g.time_hours.min())/(g.time_hours.max()-g.time_hours.min());v=np.array([np.interp(u,grid,a[:,j]) for j in range(3)]);rows.append({"dataset":d,"time_hours":t,"normalized_time":u,"common_latent_1":v[0],"common_latent_2":v[1],"common_latent_3":v[2],"n_replicates":n})
     pd.DataFrame(rows).to_csv(STAGE21/"01_common_latent_trajectory.csv",index=False);out=st.copy()
@@ -119,7 +119,7 @@ def stage2_2_validate_common_latent(st):
         r=np.mean([cur[x] for x in ds if x!=d],axis=0);x=cur[d];q.append({"dataset":d,"leave_one_dataset_out_reference_rmse":np.sqrt(np.mean((x-r)**2)),"leave_one_dataset_out_correlation":np.corrcoef(x.ravel(),r.ravel())[0,1]})
     q=pd.DataFrame(q);q.to_csv(STAGE22/"01_alignment_quality.csv",index=False);mean=np.mean(list(cur.values()),axis=0);cc=[]
     for k,u in enumerate(grid):cc.append({"normalized_time":u,"mean_common_latent_1":mean[k,0],"mean_common_latent_2":mean[k,1],"mean_common_latent_3":mean[k,2],"cross_dataset_dispersion":np.mean(np.linalg.norm(np.vstack([cur[d][k] for d in ds])-mean[k],axis=1))})
-    cc=pd.DataFrame(cc);cc.to_csv(STAGE22/"03_trajectory_concordance.csv",index=False);return q
+    pd.DataFrame(cc).to_csv(STAGE22/"03_trajectory_concordance.csv",index=False);return q
 
 def stage2_3_within_time_residual_validation(st):
     traj=[d for d in st.dataset.unique() if st[(st.dataset==d)&st.time_hours.notna()].time_hours.nunique()>=2];grid=np.linspace(0,1,25);branches=[]
@@ -127,7 +127,7 @@ def stage2_3_within_time_residual_validation(st):
         conds=sorted(set(st.loc[(st.dataset==d)&st.time_hours.notna(),"condition"]))
         valid=[c for c in conds if _curve(st,d,grid,c) is not None]
         if d=="GSE148158" and len(valid)>=2:
-            for c in valid:branches.append((d,c))
+            branches += [(d,c) for c in valid]
         else:branches.append((d,"all"))
     ref="GSE67462";refcurve=_curve(st,ref,grid);trans={}
     for d,c in branches:
@@ -140,8 +140,7 @@ def stage2_3_within_time_residual_validation(st):
     for j in range(1,4):out[f"aligned_sample_latent_{j}"]=np.nan;out[f"aligned_time_mean_{j}"]=np.nan;out[f"within_time_residual_{j}"]=np.nan
     out["within_time_residual_norm"]=np.nan;out["trajectory_branch"]="unassigned"
     for (d,c),(rot,cm,scale,rm) in trans.items():
-        mask=(out.dataset==d)&out.time_hours.notna()&((out.condition==c) if c!="all" else True);idx=out.index[mask];x=out.loc[idx,["latent_1","latent_2","latent_3"]].to_numpy(float);xa=(x-cm)@rot;xa*=scale;xa+=rm;out.loc[idx,["aligned_sample_latent_1","aligned_sample_latent_2","aligned_sample_latent_3"]]=xa;out.loc[idx,"trajectory_branch"]=c
-        means=pd.DataFrame(xa,index=idx).groupby(out.loc[idx,"time_hours"]).transform("mean").to_numpy();out.loc[idx,["aligned_time_mean_1","aligned_time_mean_2","aligned_time_mean_3"]]=means;res=xa-means
+        mask=(out.dataset==d)&out.time_hours.notna()&((out.condition==c) if c!="all" else True);idx=out.index[mask];x=out.loc[idx,["latent_1","latent_2","latent_3"]].to_numpy(float);xa=(x-cm)@rot;xa*=scale;xa+=rm;out.loc[idx,["aligned_sample_latent_1","aligned_sample_latent_2","aligned_sample_latent_3"]]=xa;out.loc[idx,"trajectory_branch"]=c;means=pd.DataFrame(xa,index=idx).groupby(out.loc[idx,"time_hours"]).transform("mean").to_numpy();out.loc[idx,["aligned_time_mean_1","aligned_time_mean_2","aligned_time_mean_3"]]=means;res=xa-means
         for j in range(3):out.loc[idx,f"within_time_residual_{j+1}"]=res[:,j]
         out.loc[idx,"within_time_residual_norm"]=np.linalg.norm(res,axis=1)
     timed=out[out.time_hours.notna()&out.aligned_sample_latent_1.notna()].copy();summary=[];rep=[]
@@ -158,8 +157,7 @@ def stage2_3_within_time_residual_validation(st):
             if xa is None or xb is None:continue
             rawcorr=np.corrcoef(xa.ravel(),xb.ravel())[0,1];aa=(xa-xa.mean(0))@_rot(xa,xb);aa*=np.divide(np.std(xb,0),np.where(np.std(aa,0)>0,np.std(aa,0),1));aa+=xb.mean(0);alignedcorr=np.corrcoef(aa.ravel(),xb.ravel())[0,1]
             rows.append({"trajectory_a":f"{a}:{ca}","trajectory_b":f"{b}:{cb}","raw_trajectory_correlation":rawcorr,"post_procrustes_correlation":alignedcorr,"correlation_gain":alignedcorr-rawcorr,"raw_rmse":np.sqrt(np.mean((xa-xb)**2)),"post_procrustes_rmse":np.sqrt(np.mean((aa-xb)**2))})
-    gain=pd.DataFrame(rows);gain.to_csv(STAGE23/"04_raw_vs_aligned_concordance.csv",index=False)
-    wd=rp.groupby(["dataset","trajectory_branch"]).replicate_pair_distance.median() if not rp.empty else pd.Series(dtype=float);between=[]
+    gain=pd.DataFrame(rows);gain.to_csv(STAGE23/"04_raw_vs_aligned_concordance.csv",index=False);wd=rp.groupby(["dataset","trajectory_branch"]).replicate_pair_distance.median() if not rp.empty else pd.Series(dtype=float);between=[]
     for _,r in gain.iterrows():
         a,ca=r.trajectory_a.split(":",1);b,cb=r.trajectory_b.split(":",1);xa=_curve(st,a,grid,None if ca=="all" else ca);xb=_curve(st,b,grid,None if cb=="all" else cb);dist=np.mean(np.linalg.norm(xa-xb,axis=1));wa=wd.get((a,ca),np.nan);wb=wd.get((b,cb),np.nan);between.append({"trajectory_a":r.trajectory_a,"trajectory_b":r.trajectory_b,"mean_trajectory_distance":dist,"median_within_replicate_distance_a":wa,"median_within_replicate_distance_b":wb,"between_to_within_ratio":dist/np.nanmean([wa,wb])})
     ratio=pd.DataFrame(between);ratio.to_csv(STAGE23/"05_between_vs_within_distance.csv",index=False);report=pd.DataFrame({"metric":["reference_dataset","trajectory_branches","mean_within_time_residual","median_within_time_residual","mean_correlation_gain_from_alignment","mean_between_to_within_ratio"],"value":[ref,";".join(f"{d}:{b}" for d,b in branches),sm.mean_within_time_residual_norm.mean(),sm.median_within_time_residual_norm.median(),gain.correlation_gain.mean(),ratio.between_to_within_ratio.mean()]});report.to_csv(STAGE23/"06_stage23_decision_metrics.csv",index=False);return out,report
@@ -218,7 +216,7 @@ def print_stage23(st,report):
             with pd.option_context("display.max_rows",None,"display.max_columns",None,"display.width",240):print(pd.read_csv(p).to_string(index=False))
     print("\n--- INTERPRETATION ---")
     if report is not None and not report.empty:
-        v=dict(zip(report.metric,report.value));
+        v=dict(zip(report.metric,report.value))
         for k in ["mean_within_time_residual","median_within_time_residual","mean_correlation_gain_from_alignment","mean_between_to_within_ratio"]:print(f"{k} = {float(v[k]):.6f}")
     print("NOTE: GSE148158 GFP and OSKM are separate trajectory branches, not replicates. Stage 5 skips rolling statistics when fewer than 3 timepoints exist.");print("="*88+"\n")
 
