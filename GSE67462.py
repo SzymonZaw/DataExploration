@@ -1,5 +1,7 @@
 from pathlib import Path
+import ftplib
 import gzip
+import shutil
 import tarfile
 import urllib.request
 import ssl
@@ -14,7 +16,9 @@ OUT = ROOT / "results" / "GSE67462"
 OUT.mkdir(parents=True, exist_ok=True)
 
 ARCHIVE = DATA / "GSE67462_RAW.tar"
-MATRIX_URL = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE67nnn/GSE67462/matrix/GSE67462_series_matrix.txt.gz"
+MATRIX_FILENAME = "GSE67462_series_matrix.txt.gz"
+MATRIX_HTTPS_URL = f"https://ftp.ncbi.nlm.nih.gov/geo/series/GSE67nnn/GSE67462/matrix/{MATRIX_FILENAME}"
+MATRIX_FTP_DIR = "/geo/series/GSE67nnn/GSE67462/matrix"
 
 SAMPLE_GROUPS = {
     "GSM1647454": "day0", "GSM1647455": "day0", "GSM1647456": "day1", "GSM1647457": "day1",
@@ -65,22 +69,82 @@ def inspect_archive(path):
     print("=== end archive ===")
 
 
-def download_matrix():
-    target = OUT / "GSE67462_series_matrix.txt.gz"
-    if target.exists() and target.stat().st_size > 0:
-        return target
-    print("Downloading GEO Series Matrix for processed expression exploration...")
+def validate_gzip(path):
     try:
-        urllib.request.urlretrieve(MATRIX_URL, target)
-    except Exception as first_error:
-        print(f"Standard HTTPS download failed: {first_error}")
-        print("Retrying with a compatibility SSL context...")
-        context = ssl._create_unverified_context()
-        with urllib.request.urlopen(MATRIX_URL, context=context) as response, open(target, "wb") as out:
-            out.write(response.read())
-    if target.stat().st_size == 0:
-        raise ValueError("Pobrany Series Matrix jest pusty.")
-    return target
+        with gzip.open(path, "rb") as f:
+            f.read(1024)
+        return True
+    except (OSError, EOFError):
+        return False
+
+
+def download_https(target, context=None):
+    temp = target.with_suffix(target.suffix + ".part")
+    if temp.exists():
+        temp.unlink()
+    request = urllib.request.Request(MATRIX_HTTPS_URL, headers={"User-Agent": "DataExploration-GSE67462/1.0"})
+    with urllib.request.urlopen(request, context=context, timeout=120) as response, open(temp, "wb") as out:
+        shutil.copyfileobj(response, out, length=1024 * 1024)
+    if not validate_gzip(temp):
+        temp.unlink(missing_ok=True)
+        raise ValueError("Pobrany plik HTTPS nie jest poprawnym archiwum gzip.")
+    temp.replace(target)
+
+
+def download_ftp(target):
+    temp = target.with_suffix(target.suffix + ".part")
+    if temp.exists():
+        temp.unlink()
+    print("Trying NCBI FTP as a fallback...")
+    with ftplib.FTP("ftp.ncbi.nlm.nih.gov", timeout=120) as ftp:
+        ftp.login()
+        ftp.cwd(MATRIX_FTP_DIR)
+        with open(temp, "wb") as out:
+            ftp.retrbinary(f"RETR {MATRIX_FILENAME}", out.write, blocksize=1024 * 1024)
+    if not validate_gzip(temp):
+        temp.unlink(missing_ok=True)
+        raise ValueError("Pobrany plik FTP nie jest poprawnym archiwum gzip.")
+    temp.replace(target)
+
+
+def download_matrix():
+    target = OUT / MATRIX_FILENAME
+    if target.exists() and target.stat().st_size > 0 and validate_gzip(target):
+        print(f"Using existing valid Series Matrix: {target.name} ({target.stat().st_size:,} bytes)")
+        return target
+    if target.exists():
+        print("Existing Series Matrix is incomplete or invalid; downloading it again...")
+        target.unlink()
+
+    print("Downloading GEO Series Matrix for processed expression exploration...")
+    errors = []
+
+    try:
+        download_https(target)
+        print("Download successful via standard HTTPS.")
+        return target
+    except Exception as e:
+        errors.append(f"HTTPS: {e}")
+        print(f"Standard HTTPS download failed: {e}")
+
+    try:
+        print("Retrying HTTPS with a compatibility SSL context...")
+        download_https(target, ssl._create_unverified_context())
+        print("Download successful via compatibility SSL context.")
+        return target
+    except Exception as e:
+        errors.append(f"HTTPS compatibility: {e}")
+        print(f"Compatibility HTTPS download failed: {e}")
+
+    try:
+        download_ftp(target)
+        print("Download successful via NCBI FTP.")
+        return target
+    except Exception as e:
+        errors.append(f"FTP: {e}")
+        print(f"NCBI FTP download failed: {e}")
+
+    raise RuntimeError("Nie udało się pobrać poprawnego GEO Series Matrix. " + " | ".join(errors))
 
 
 def read_series_matrix(path):
@@ -90,6 +154,9 @@ def read_series_matrix(path):
         for line in f:
             if line.startswith("!series_matrix_table_begin"):
                 break
+        else:
+            raise ValueError("Nie znaleziono !series_matrix_table_begin w Series Matrix.")
+
         for line in f:
             if line.startswith("!series_matrix_table_end"):
                 break
@@ -101,14 +168,20 @@ def read_series_matrix(path):
                 columns = [p.strip('"') for p in parts]
             else:
                 rows.append(parts)
+        else:
+            raise ValueError("Nie znaleziono !series_matrix_table_end w Series Matrix.")
+
     if columns is None or not rows:
         raise ValueError("Nie udało się odczytać tabeli Series Matrix GSE67462.")
+
     df = pd.DataFrame(rows, columns=columns)
     df = df.rename(columns={df.columns[0]: "ID_REF"})
     for c in df.columns[1:]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df = df.set_index("ID_REF")
-    return df.dropna(how="all")
+    df = df.dropna(how="all")
+    print(f"Series Matrix parsed successfully: {df.shape[0]:,} features x {df.shape[1]:,} samples")
+    return df
 
 
 def explore(expr):
@@ -197,6 +270,7 @@ def explore(expr):
     if len(EV) >= 2:
         report += [f"PC1: {EV[0]*100:.2f}%", f"PC2: {EV[1]*100:.2f}%", f"PC1+PC2: {(EV[0]+EV[1])*100:.2f}%"]
     (OUT / "REPORT.txt").write_text("\n".join(report), encoding="utf-8")
+    print("GSE67462 EDA results generated successfully.")
 
 
 if ARCHIVE.exists():
