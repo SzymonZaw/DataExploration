@@ -15,6 +15,23 @@ DATASETS = {
     "GSE67520": ("Oct4 binding and Histone modification profiling during OSKM-mediated 2nd reprogramming", "Mouse; ChIP-seq / genome binding and occupancy profiling", "GPL13112 - Illumina HiSeq 2000; GPL17021 - Illumina HiSeq 2500", 71, "Regulatory dataset profiling Oct4, histone modifications, RNAPII and input controls during second reprogramming."),
 }
 
+GSE52052_GROUPS = {
+    "HDF_GFP(+)_day11": "GFP_control",
+    "HDF_OSK+control_inh_TRA(+)_day11": "OSK_control_inhibitor",
+    "HDF_OSK+let-7_inh_TRA(+)_day11": "OSK_let7_inhibitor",
+    "HDF_OSKM_TRA(+)_day11": "OSKM",
+    "HDF_OSK+LIN-41_TRA(+)_day11": "OSK_LIN41",
+    "H1_hESC": "H1_hESC",
+}
+
+
+def group_for_gse52052(sample):
+    s = str(sample).strip()
+    for key, group in GSE52052_GROUPS.items():
+        if s == key or s.startswith(key) or key in s:
+            return group
+    return "unclassified"
+
 
 def read_csv(path, index_col=0):
     if not path.exists():
@@ -39,6 +56,9 @@ def expression_section(name, lines):
     corr = read_csv(folder / "04_sample_correlation.csv")
     var = read_csv(folder / "06_feature_variance.csv")
     pca = read_csv(folder / "07_PCA_coordinates.csv")
+    if name == "GSE52052" and meta is not None and "sample" in meta.columns:
+        meta = meta.copy()
+        meta["group"] = meta["sample"].map(group_for_gse52052)
 
     lines += ["Exploration performed", "----------------------",
               "- Expression distributions / boxplot.",
