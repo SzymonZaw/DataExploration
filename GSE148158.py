@@ -23,14 +23,16 @@ def read_expression(path):
 
 
 def save_plot(fig, name):
-    fig.tight_layout(); fig.savefig(OUT / name, dpi=250); plt.close(fig)
+    fig.tight_layout()
+    fig.savefig(OUT / name, dpi=250)
+    plt.close(fig)
 
 
 expr = read_expression(DATA)
 expr.to_csv(OUT / "expression.csv")
 
 fig, ax = plt.subplots(figsize=(12, 6))
-ax.boxplot([expr[c].dropna() for c in expr.columns], labels=expr.columns, showfliers=False)
+ax.boxplot([expr[c].dropna() for c in expr.columns], tick_labels=expr.columns, showfliers=False)
 ax.set_title("GSE148158 - normalized expression distributions")
 ax.set_ylabel("Normalized expression")
 ax.tick_params(axis="x", rotation=45)
