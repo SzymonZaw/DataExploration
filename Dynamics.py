@@ -1,4 +1,4 @@
-"""Dynamics v4.2: staged OSKM reprogramming dynamics pipeline.
+"""Dynamics v4.3: staged OSKM reprogramming dynamics pipeline.
 
 Stages 1-5: integration, latent representation, trajectories, derivatives,
 and critical-transition indicators.
@@ -38,10 +38,12 @@ GSM_TIME = {
     "GSM710515":24.,"GSM710516":24.,"GSM710517":48.,"GSM710518":48.,"GSM710519":72.,"GSM710520":72.,
     "GSM1258008":264.,"GSM1258009":264.,"GSM1258010":264.,"GSM1258011":264.,"GSM1258012":264.,"GSM1258013":264.,
     "GSM1647454":0.,"GSM1647455":0.,"GSM1647456":24.,"GSM1647457":24.,"GSM1647458":72.,"GSM1647459":72.,
-    "GSM1647460":120.,"GSM1647461":120.,"GSM1647462":168.,"GSM1647463":168.,"GSM1647464":264.,"GSM1647465":264.,
+    "GSM1647460":120.,"GSM1647461":168.,"GSM1647462":168.,"GSM1647463":168.,"GSM1647464":264.,"GSM1647465":264.,
     "GSM1647466":360.,"GSM1647467":360.,"GSM1647468":432.,"GSM1647469":432.,
     "GSM8986586":0.,"GSM8986587":72.,"GSM8986588":168.,"GSM8986589":240.,"GSM8986590":0.,"GSM8986591":72.,"GSM8986592":168.,"GSM8986593":240.,
 }
+# Correct the two remaining GSE67462 replicate times explicitly.
+GSM_TIME.update({"GSM1647460":120.,"GSM1647461":120.})
 GSE28688_ROW_SAMPLE = [f"GSM{x}" for x in range(710513,710527)]
 GSE28688_ROW_TIME = [0.,0.,24.,24.,48.,48.,72.,72.,np.nan,np.nan,np.nan,np.nan,np.nan,np.nan]
 TIME_PATTERNS = {
@@ -156,7 +158,7 @@ def stage2_1_common_latent_state(states):
     pd.DataFrame({"reference_dataset":[reference],"trajectory_datasets":[";".join(sorted(curves))],"grid_points":[len(grid)],"alignment":["orthogonal Procrustes on normalized-time trajectories"],"fit_uses_context_only_data":[False],"interpretation":["trajectory geometry; not raw-expression equivalence"]}).to_csv(STAGE21/"03_alignment_metadata.csv",index=False); out.to_csv(STAGE21/"04_sample_common_latent_state.csv",index=False); return out
 
 def _pairwise_metrics(a,b):
-    xa=a[["common_latent_1","common_latent_2","common_latent_3"]].to_numpy(float); xb=b[["common_latent_1","common_latent_2","common_latent_3"]].to_numpy(float); da=np.linalg.norm(xa,axis=1); db=np.linalg.norm(xb,axis=1)
+    xa=a[["common_latent_1","common_latent_2","common_latent_3"]].to_numpy(float); xb=b[["common_latent_1","common_latent_2","common_latent_3"]].to_numpy(float)
     corr=np.corrcoef(xa.ravel(),xb.ravel())[0,1] if np.std(xa)>0 and np.std(xb)>0 else np.nan
     rmse=float(np.sqrt(np.mean((xa-xb)**2))); path_a=float(np.sum(np.linalg.norm(np.diff(xa,axis=0),axis=1))); path_b=float(np.sum(np.linalg.norm(np.diff(xb,axis=0),axis=1)))
     return corr,rmse,path_a,path_b
@@ -176,14 +178,11 @@ def stage2_2_validate_common_latent(states):
     for d in datasets:
         c=curves[d]; ref=np.mean([curves[x] for x in datasets if x!=d],axis=0) if len(datasets)>1 else c; rmse=float(np.sqrt(np.mean((c-ref)**2))); corr=float(np.corrcoef(c.ravel(),ref.ravel())[0,1]) if np.std(c)>0 and np.std(ref)>0 else np.nan; quality.append({"dataset":d,"leave_one_dataset_out_reference_rmse":rmse,"leave_one_dataset_out_correlation":corr})
     q=pd.DataFrame(quality); q.to_csv(STAGE22/"01_alignment_quality.csv",index=False)
-    # Concordance by normalized time, useful for identifying shared versus study-specific regions.
     mean_curve=np.mean(list(curves.values()),axis=0); rows=[]
     for k,u in enumerate(grid):
         vals=np.vstack([curves[d][k] for d in datasets]); rows.append({"normalized_time":u,"mean_common_latent_1":mean_curve[k,0],"mean_common_latent_2":mean_curve[k,1],"mean_common_latent_3":mean_curve[k,2],"cross_dataset_dispersion":float(np.mean(np.linalg.norm(vals-mean_curve[k],axis=1)))})
     concord=pd.DataFrame(rows); concord.to_csv(STAGE22/"03_trajectory_concordance.csv",index=False)
-    # Sensitivity to reference choice: align each dataset to every other possible reference.
-    sens=[]
-    raw_states=states.copy()
+    sens=[]; raw_states=states.copy()
     for ref in datasets:
         ref_curve=curves[ref]
         for d in datasets:
@@ -191,8 +190,46 @@ def stage2_2_validate_common_latent(states):
             c=_trajectory_grid(raw_states,d,grid); aligned=(c-c.mean(axis=0))@_procrustes_rotation(c,ref_curve); s=np.std(aligned,axis=0); r=np.std(ref_curve,axis=0); aligned=aligned*np.divide(r,np.where(s>0,s,1.0)); aligned+=ref_curve.mean(axis=0); rmse=float(np.sqrt(np.mean((aligned-ref_curve)**2))); sens.append({"reference_dataset":ref,"test_dataset":d,"reference_sensitivity_rmse":rmse})
     sensitivity=pd.DataFrame(sens); sensitivity.to_csv(STAGE22/"04_reference_sensitivity.csv",index=False)
     summary=pd.DataFrame({"metric":["n_trajectory_datasets","n_pairwise_comparisons","mean_pairwise_correlation","median_pairwise_rmse","mean_cross_dataset_dispersion","mean_reference_sensitivity_rmse"],"value":[len(datasets),len(pairwise),pairwise["trajectory_correlation"].mean() if len(pairwise) else np.nan,pairwise["aligned_rmse"].median() if len(pairwise) else np.nan,concord["cross_dataset_dispersion"].mean() if len(concord) else np.nan,sensitivity["reference_sensitivity_rmse"].mean() if len(sensitivity) else np.nan]}); summary.to_csv(STAGE22/"05_common_latent_validation.csv",index=False)
-    report=["Dynamics v4.2 — Stage 2.2 validation","","Purpose: quantify whether the common latent geometry is stable across independent datasets.","","Metrics: pairwise trajectory correlation, aligned RMSE, path-length ratio, leave-one-dataset-out reference comparison, normalized-time dispersion, and reference sensitivity.","","Interpretation boundary: high concordance supports reproducibility of trajectory geometry, but does not prove molecular equivalence, causality, or universality across species/platforms."]
+    report=["Dynamics v4.3 — Stage 2.2 validation","","Purpose: quantify whether the common latent geometry is stable across independent datasets.","","Metrics: pairwise trajectory correlation, aligned RMSE, path-length ratio, leave-one-dataset-out reference comparison, normalized-time dispersion, and reference sensitivity.","","Interpretation boundary: high concordance supports reproducibility of trajectory geometry, but does not prove molecular equivalence, causality, or universality across species/platforms."]
     (STAGE22/"REPORT.txt").write_text("\n".join(report),encoding="utf-8"); return summary
+
+def print_stage22_validation(summary):
+    """Print the Stage 2.2 evidence needed for the go/no-go decision."""
+    files = {
+        "ALIGNMENT QUALITY": STAGE22 / "01_alignment_quality.csv",
+        "PAIRWISE DISTANCES": STAGE22 / "02_cross_dataset_distances.csv",
+        "TRAJECTORY CONCORDANCE": STAGE22 / "03_trajectory_concordance.csv",
+        "REFERENCE SENSITIVITY": STAGE22 / "04_reference_sensitivity.csv",
+        "SUMMARY": STAGE22 / "05_common_latent_validation.csv",
+    }
+    print("\n" + "=" * 88)
+    print("STAGE 2.2 VALIDATION — FULL CONSOLE INSPECTION")
+    print("=" * 88)
+    for title, path in files.items():
+        print(f"\n--- {title} ---")
+        if not path.exists():
+            print(f"MISSING: {path}")
+            continue
+        try:
+            df = pd.read_csv(path)
+            if df.empty:
+                print("EMPTY")
+            else:
+                with pd.option_context("display.max_rows", None, "display.max_columns", None, "display.width", 220, "display.max_colwidth", 80):
+                    print(df.to_string(index=False))
+        except Exception as exc:
+            print(f"ERROR READING {path}: {exc}")
+    if summary is not None and not summary.empty:
+        print("\n--- AUTOMATIC GO/NO-GO FLAGS ---")
+        vals=dict(zip(summary["metric"],summary["value"]))
+        corr=vals.get("mean_pairwise_correlation",np.nan); rmse=vals.get("median_pairwise_rmse",np.nan); disp=vals.get("mean_cross_dataset_dispersion",np.nan); sens=vals.get("mean_reference_sensitivity_rmse",np.nan)
+        print(f"mean_pairwise_correlation = {corr:.6f}")
+        print(f"median_pairwise_rmse = {rmse:.6f}")
+        print(f"mean_cross_dataset_dispersion = {disp:.6f}")
+        print(f"mean_reference_sensitivity_rmse = {sens:.6f}")
+        print("NOTE: these are diagnostics, not statistical proof. High concordance can be produced by the time-anchored alignment itself.")
+        print("NEXT DECISION: inspect within-time residuals before treating the common latent space as biologically informative.")
+    print("=" * 88 + "\n")
 
 def stage3_trajectory_reconstruction(states):
     if states.empty: return pd.DataFrame()
@@ -246,9 +283,9 @@ def stage9_predictive_ai(dynamics):
     table=pd.DataFrame(rows); table.to_csv(STAGE_DIRS[9]/"01_next_state_prediction_table.csv",index=False); pd.DataFrame({"model_target":["z(t+dt) from z(t), dt"],"validation_unit":["complete_dataset"],"status":["preparation_only"]}).to_csv(STAGE_DIRS[9]/"02_ai_prediction_plan.csv",index=False); return table
 
 def main():
-    states,av=stage1_data_integration(); states=stage2_latent_state(states); states=stage2_1_common_latent_state(states); validation=stage2_2_validate_common_latent(states); traj=stage3_trajectory_reconstruction(states); dyn=stage4_dynamics(traj); dyn=stage5_critical_transitions(dyn); sym=stage6_symbolic_equation_discovery(dyn); hold=stage7_heldout_validation(dyn); reg=stage8_regulatory_integration(dyn); pred=stage9_predictive_ai(dyn)
-    report=["Dynamics v4.2 — stages 1-9","","Stage 1: data integration and metadata harmonisation.","Stage 2: study-normalized latent state representation.","Stage 2.1: time-anchored common trajectory geometry.","Stage 2.2: common latent-space validation.","Stage 3: time-aware trajectory reconstruction.","Stage 4: derivative-based dynamics.","Stage 5: critical-transition/stability indicators.","Stage 6: symbolic equation-discovery design; no equation fitted.","Stage 7: complete-dataset held-out validation plan.","Stage 8: regulatory integration plan using GSE67520.","Stage 9: next-state predictive AI design; no model fitted.","","Scientific boundary: Stage 2.1/2.2 test trajectory geometry, not raw-expression equivalence or biological universality. Stages 6-9 remain preparation layers until validation is satisfactory."]
+    states,av=stage1_data_integration(); states=stage2_latent_state(states); states=stage2_1_common_latent_state(states); validation=stage2_2_validate_common_latent(states); print_stage22_validation(validation); traj=stage3_trajectory_reconstruction(states); dyn=stage4_dynamics(traj); dyn=stage5_critical_transitions(dyn); sym=stage6_symbolic_equation_discovery(dyn); hold=stage7_heldout_validation(dyn); reg=stage8_regulatory_integration(dyn); pred=stage9_predictive_ai(dyn)
+    report=["Dynamics v4.3 — stages 1-9","","Stage 1: data integration and metadata harmonisation.","Stage 2: study-normalized latent state representation.","Stage 2.1: time-anchored common trajectory geometry.","Stage 2.2: common latent-space validation with full console inspection.","Stage 3: time-aware trajectory reconstruction.","Stage 4: derivative-based dynamics.","Stage 5: critical-transition/stability indicators.","Stage 6: symbolic equation-discovery design; no equation fitted.","Stage 7: complete-dataset held-out validation plan.","Stage 8: regulatory integration plan using GSE67520.","Stage 9: next-state predictive AI design; no model fitted.","","Scientific boundary: Stage 2.1/2.2 test trajectory geometry, not raw-expression equivalence or biological universality. Stages 6-9 remain preparation layers until validation is satisfactory."]
     (OUT/"REPORT.txt").write_text("\n".join(report),encoding="utf-8")
-    print(f"Dynamics v4.2 results written to: {OUT}"); print(f"Datasets with PCA: {int(av['PCA_file_found'].sum())}/{len(DATASETS)}"); print(f"Stage 2.1 aligned trajectory datasets: {states['common_latent_status'].eq('time_anchored_aligned').groupby(states['dataset']).any().sum() if not states.empty else 0}"); print(f"Stage 2.2 validation rows: {len(validation)}"); print(f"Trajectory timepoints: {len(traj)}"); print(f"Stage 6 symbolic rows: {len(sym)}"); print(f"Stage 7 held-out datasets: {len(hold)}"); print(f"Stage 8 regulatory rows: {len(reg)}"); print(f"Stage 9 prediction pairs: {len(pred)}")
+    print(f"Dynamics v4.3 results written to: {OUT}"); print(f"Datasets with PCA: {int(av['PCA_file_found'].sum())}/{len(DATASETS)}"); print(f"Stage 2.1 aligned trajectory datasets: {states['common_latent_status'].eq('time_anchored_aligned').groupby(states['dataset']).any().sum() if not states.empty else 0}"); print(f"Stage 2.2 validation rows: {len(validation)}"); print(f"Trajectory timepoints: {len(traj)}"); print(f"Stage 6 symbolic rows: {len(sym)}"); print(f"Stage 7 held-out datasets: {len(hold)}"); print(f"Stage 8 regulatory rows: {len(reg)}"); print(f"Stage 9 prediction pairs: {len(pred)}")
 
 if __name__=="__main__": main()
