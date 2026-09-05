@@ -12,21 +12,24 @@ OUT = ROOT / "results" / "GSE28688"
 OUT.mkdir(parents=True, exist_ok=True)
 
 SAMPLE_GROUPS = {
-    "HFF1-a": "HFF1",
-    "HFF1-b": "HFF1",
-    "HFF1-24 h post-transduction-a": "24h",
-    "HFF1-24 h post-transduction-b": "24h",
-    "HFF1-48 h post-transduction-a": "48h",
-    "HFF1-48 h post-transduction-b": "48h",
-    "HFF1-72 h post-transduction-a": "72h",
-    "HFF1-72 h post-transduction-b": "72h",
-    "H1": "H1_hESC",
-    "H9": "H9_hESC",
-    "iPS2 from HFF1-a": "iPS2",
-    "iPS2 from HFF1-b": "iPS2",
-    "iPS4 from HFF1-a": "iPS4",
-    "iPS4 from HFF1-b": "iPS4",
+    "HFF1-a": "HFF1", "HFF1-b": "HFF1",
+    "HFF1-24 h post-transduction-a": "24h", "HFF1-24 h post-transduction-b": "24h",
+    "HFF1-48 h post-transduction-a": "48h", "HFF1-48 h post-transduction-b": "48h",
+    "HFF1-72 h post-transduction-a": "72h", "HFF1-72 h post-transduction-b": "72h",
+    "H1": "H1_hESC", "H9": "H9_hESC",
+    "iPS2 from HFF1-a": "iPS2", "iPS2 from HFF1-b": "iPS2",
+    "iPS4 from HFF1-a": "iPS4", "iPS4 from HFF1-b": "iPS4",
 }
+
+
+def group_for_sample(sample):
+    s = str(sample).strip()
+    if s in SAMPLE_GROUPS:
+        return SAMPLE_GROUPS[s]
+    for key, group in SAMPLE_GROUPS.items():
+        if s.startswith(key) or key in s:
+            return group
+    return "unclassified"
 
 
 def read_table(path):
@@ -141,7 +144,7 @@ def explore(expr, label):
     norm.to_csv(out / "expression_normalized.csv")
 
     metadata = pd.DataFrame({"sample": expr.columns})
-    metadata["group"] = metadata["sample"].map(SAMPLE_GROUPS).fillna("unclassified")
+    metadata["group"] = metadata["sample"].map(group_for_sample)
     metadata.to_csv(out / "01_sample_metadata.csv", index=False)
 
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -151,7 +154,7 @@ def explore(expr, label):
     fig.tight_layout(); fig.savefig(out / "02_boxplot.png", dpi=250); plt.close(fig)
 
     qc = pd.DataFrame({"mean": expr.mean(), "median": expr.median(), "sd": expr.std(), "missing": expr.isna().sum()})
-    qc["group"] = qc.index.map(SAMPLE_GROUPS).fillna("unclassified")
+    qc["group"] = qc.index.map(group_for_sample)
     qc.to_csv(out / "03_sample_QC.csv")
 
     corr = norm.corr()
@@ -174,7 +177,7 @@ def explore(expr, label):
     EV = S**2 / np.sum(S**2)
     n_pc = min(5, PC.shape[1])
     coords = pd.DataFrame(PC[:, :n_pc], index=X.index, columns=[f"PC{i + 1}" for i in range(n_pc)])
-    coords["group"] = coords.index.map(SAMPLE_GROUPS).fillna("unclassified")
+    coords["group"] = coords.index.map(group_for_sample)
     coords.to_csv(out / "07_PCA_coordinates.csv")
 
     if len(EV) >= 2:
