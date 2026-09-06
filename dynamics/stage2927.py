@@ -28,7 +28,21 @@ def corr(a,b):
 
 def rmse(a,b):
     a=np.asarray(a,float); b=np.asarray(b,float)
-    return float(np.sqrt(np.mean((a-b)**2)))
+    ok=np.isfinite(a)&np.isfinite(b)
+    if not ok.any():return np.nan
+    return float(np.sqrt(np.mean((a[ok]-b[ok])**2)))
+
+
+def _finite_matrix(X):
+    X=np.asarray(X,float)
+    X=np.array(X,copy=True)
+    good=np.isfinite(X)
+    if good.all():return X
+    col=np.nanmedian(X,axis=0)
+    col=np.where(np.isfinite(col),col,0.0)
+    rows,cols=np.where(~good)
+    if len(rows):X[rows,cols]=col[cols]
+    return X
 
 
 def load():
@@ -62,43 +76,40 @@ def dataset_trajectories(m,meta):
         X["time_hours"]=g["time_hours"].to_numpy(float)
         X=X.groupby("time_hours",sort=True).mean()
         times=X.index.to_numpy(float)
-        values=X.to_numpy(float)
-        if len(times)>=3: out[ds]=(times,values,list(m.index))
+        values=_finite_matrix(X.to_numpy(float))
+        if len(times)>=3:out[ds]=(times,values,list(m.index))
     return out
 
 
 def invariant_scores(train):
-    ds=list(train)
-    genes=train[ds[0]][2]
-    coefs=[]
-    magnitudes=[]
+    ds=list(train); genes=train[ds[0]][2]; coefs=[]; magnitudes=[]
     for d in ds:
         t,X,_=train[d]
+        X=_finite_matrix(X)
         tn=(t-t.min())/(t.max()-t.min())
         B=np.column_stack([np.ones(len(tn)),tn,tn*tn])
         coef=np.linalg.lstsq(B,X,rcond=None)[0]
         vec=coef[1:]
         mag=np.linalg.norm(vec,axis=0)
-        mag[mag==0]=1
-        coefs.append(vec/mag)
-        magnitudes.append(mag)
+        mag=np.where(np.isfinite(mag),mag,0.0)
+        scale=np.where(mag>0,mag,1.0)
+        coefs.append(vec/scale);magnitudes.append(mag)
     A=np.stack(coefs)
     mean=A.mean(axis=0)
-    score=np.nanmean(np.sum(A*mean[None,:,:],axis=1),axis=0)
-    magnitude=np.nanmean(magnitudes,axis=0)
+    agreement=np.sum(A*mean[None,:,:],axis=1)
+    score=np.mean(agreement,axis=0)
+    score=np.where(np.isfinite(score),score,-np.inf)
+    magnitude=np.mean(magnitudes,axis=0)
     return pd.DataFrame({"gene":genes,"invariance_score":score,"temporal_magnitude":magnitude,"selection_score":score*magnitude})
 
 
 def fit_axis(train,genes,k=1):
-    rows=[]
-    for d,(t,X,all_genes) in train.items():
+    blocks=[]
+    for _,(t,X,all_genes) in train.items():
         idx=[all_genes.index(g) for g in genes]
-        Y=X[:,idx]
-        Y=StandardScaler().fit_transform(Y)
-        tn=(t-t.min())/(t.max()-t.min())
-        for i in range(len(t)):
-            rows.append((d,float(tn[i]),Y[i]))
-    A=np.vstack([r[2] for r in rows])
+        blocks.append(_finite_matrix(X[:,idx]))
+    A=np.vstack(blocks)
+    A=StandardScaler().fit_transform(A)
     return PCA(n_components=k).fit(A)
 
 
@@ -107,20 +118,17 @@ def one_step(t,z):
 
 
 def run():
-    m,meta=load()
-    traj=dataset_trajectories(m,meta)
+    m,meta=load();traj=dataset_trajectories(m,meta)
     log(f"trajectory datasets: {', '.join(sorted(traj))}")
-    fold_rows=[]; axis_rows=[]; gene_rows=[]; pred_rows=[]; perm_rows=[]
+    fold_rows=[];axis_rows=[];gene_rows=[];pred_rows=[];perm_rows=[]
 
     for fold,held in enumerate(TARGET,1):
         train={d:v for d,v in traj.items() if d!=held}
         if held not in traj or len(train)<2:continue
         log(f"fold {fold}/3: held out {held}")
-
         scores=invariant_scores(train).sort_values("selection_score",ascending=False)
         genes=scores.loc[scores["invariance_score"]>=0.75,"gene"].astype(str).head(2000).tolist()
-        if len(genes)<MIN_TRAIN_GENES:
-            genes=scores.head(MIN_TRAIN_GENES)["gene"].astype(str).tolist()
+        if len(genes)<MIN_TRAIN_GENES:genes=scores.head(MIN_TRAIN_GENES)["gene"].astype(str).tolist()
         gene_rows.append({"held_out_dataset":held,"n_training_datasets":len(train),"n_selected_genes":len(genes),"selection_rule":"cross-dataset normalized temporal-shape concordance; training only","median_invariance_score":float(scores.head(len(genes))["invariance_score"].median())})
 
         for k in (1,2,3):
@@ -128,98 +136,67 @@ def run():
             axis_rows.append({"held_out_dataset":held,"n_coordinates":k,"explained_variance":float(pca.explained_variance_ratio_.sum())})
 
         pca=fit_axis(train,genes,k=1)
-        trainY=np.vstack([v[1][:,[v[2].index(g) for g in genes]] for v in train.values()])
+        trainY=np.vstack([_finite_matrix(v[1][:,[v[2].index(g) for g in genes]]) for v in train.values()])
         sc=StandardScaler().fit(trainY)
         train_axes={}
         for d,(t,X,allg) in train.items():
             idx=[allg.index(g) for g in genes]
-            train_axes[d]=(t,pca.transform(sc.transform(X[:,idx]))[:,0])
+            train_axes[d]=(t,pca.transform(sc.transform(_finite_matrix(X[:,idx])))[:,0])
 
         test_t,test_X,allg=traj[held]
         test_idx=[allg.index(g) for g in genes]
-        test_axis=pca.transform(sc.transform(test_X[:,test_idx]))[:,0]
+        test_axis=pca.transform(sc.transform(_finite_matrix(test_X[:,test_idx])))[:,0]
 
-        tt=np.concatenate([t for t,_ in train_axes.values()])
-        zz=np.concatenate([z for _,z in train_axes.values()])
+        tt=np.concatenate([t for t,_ in train_axes.values()]);zz=np.concatenate([z for _,z in train_axes.values()])
         orientation=corr(tt,zz)
         if np.isfinite(orientation) and orientation<0:
             train_axes={d:(t,-z) for d,(t,z) in train_axes.items()}
-            test_axis=-test_axis
-            zz=-zz
-            orientation=-orientation
+            test_axis=-test_axis;zz=-zz;orientation=-orientation
 
         tr=[]
         for d,(t,z) in train_axes.items():tr.extend(one_step(t,z))
         te=one_step(test_t,test_axis)
         if len(tr)<3 or len(te)<2:continue
 
-        X=np.array([r[3] for r in tr]).reshape(-1,1)
-        Y=np.array([r[4] for r in tr])
+        X=np.array([r[3] for r in tr]).reshape(-1,1);Y=np.array([r[4] for r in tr])
         model=LinearRegression().fit(X,Y)
         pred=model.predict(np.array([r[3] for r in te]).reshape(-1,1))
-        true=np.array([r[4] for r in te])
-        cur=np.array([r[3] for r in te])
-
-        flat_t=np.concatenate([t for t,_ in train_axes.values()])
-        flat_z=np.concatenate([z for _,z in train_axes.values()])
+        true=np.array([r[4] for r in te]);cur=np.array([r[3] for r in te])
+        flat_t=np.concatenate([t for t,_ in train_axes.values()]);flat_z=np.concatenate([z for _,z in train_axes.values()])
         lt=LinearRegression().fit(flat_t.reshape(-1,1),flat_z)
         nearest_pred=np.array([flat_z[int(np.argmin(np.abs(flat_t-r[2])))] for r in te])
         linear_pred=lt.predict(np.array([r[2] for r in te]).reshape(-1,1))
 
-        obs=rmse(pred,true)
-        persistence=rmse(cur,true)
-        near=rmse(nearest_pred,true)
-        lin=rmse(linear_pred,true)
+        obs=rmse(pred,true);persistence=rmse(cur,true);near=rmse(nearest_pred,true);lin=rmse(linear_pred,true)
         fold_rows.append({"held_out_dataset":held,"n_training_datasets":len(train),"n_selected_genes":len(genes),"n_training_transitions":len(tr),"n_test_transitions":len(te),"train_axis_time_correlation":orientation,"test_progress_spearman":corr(np.array([r[2] for r in te]),true),"state_model_rmse":obs,"persistence_rmse":persistence,"nearest_time_rmse":near,"linear_time_rmse":lin,"improvement_vs_persistence":persistence-obs,"improvement_vs_nearest_time":near-obs,"improvement_vs_linear_time":lin-obs})
-        for r,a,b in zip(te,pred,true):
-            pred_rows.append({"held_out_dataset":held,"previous_time_hours":r[1],"future_time_hours":r[2],"true_state":float(b),"predicted_state":float(a),"persistence_state":float(r[3])})
+        for r,a,b in zip(te,pred,true):pred_rows.append({"held_out_dataset":held,"previous_time_hours":r[1],"future_time_hours":r[2],"true_state":float(b),"predicted_state":float(a),"persistence_state":float(r[3])})
 
-        rng=np.random.default_rng(27000+fold)
-        null=np.empty(N_PERM)
+        rng=np.random.default_rng(27000+fold);null=np.empty(N_PERM)
         for j in range(N_PERM):null[j]=rmse(pred,rng.permutation(true))
         perm_rows.append({"held_out_dataset":held,"observed_rmse":obs,"permutation_p_rmse":float((1+np.sum(null<=obs))/(N_PERM+1)),"null_mean_rmse":float(null.mean()),"null_p05_rmse":float(np.quantile(null,.05)),"null_p95_rmse":float(np.quantile(null,.95))})
 
-        rng=np.random.default_rng(28000+fold)
-        base=pca.components_[0]
-        cos=[]
-        gene_idx=np.arange(len(genes))
+        rng=np.random.default_rng(28000+fold);base=pca.components_[0];cos=[];gene_idx=np.arange(len(genes))
         for _ in range(N_BOOT):
             sel=rng.choice(gene_idx,size=len(gene_idx),replace=True)
-            A=np.vstack([v[1][:,[v[2].index(genes[i]) for i in sel]] for v in train.values()])
-            A=StandardScaler().fit_transform(A)
-            pc=PCA(n_components=1).fit(A).components_[0]
-            ref=base[sel]
-            den=np.linalg.norm(pc)*np.linalg.norm(ref)
+            A=np.vstack([_finite_matrix(v[1][:,[v[2].index(genes[i]) for i in sel]]) for v in train.values()])
+            A=StandardScaler().fit_transform(A);pc=PCA(n_components=1).fit(A).components_[0]
+            ref=base[sel];den=np.linalg.norm(pc)*np.linalg.norm(ref)
             if den:cos.append(abs(float(np.dot(pc,ref)/den)))
         axis_rows.append({"held_out_dataset":held,"n_coordinates":"bootstrap_axis","bootstrap_cosine_mean":float(np.mean(cos)) if cos else np.nan,"bootstrap_cosine_p05":float(np.quantile(cos,.05)) if cos else np.nan,"bootstrap_cosine_p95":float(np.quantile(cos,.95)) if cos else np.nan})
 
-    f=pd.DataFrame(fold_rows)
-    g=pd.DataFrame(gene_rows)
-    a=pd.DataFrame(axis_rows)
-    p=pd.DataFrame(pred_rows)
-    pm=pd.DataFrame(perm_rows)
-
+    f=pd.DataFrame(fold_rows);g=pd.DataFrame(gene_rows);a=pd.DataFrame(axis_rows);p=pd.DataFrame(pred_rows);pm=pd.DataFrame(perm_rows)
     if len(f):
         summary=pd.DataFrame([{"n_valid_folds":len(f),"mean_state_model_rmse":f["state_model_rmse"].mean(),"mean_persistence_rmse":f["persistence_rmse"].mean(),"mean_nearest_time_rmse":f["nearest_time_rmse"].mean(),"mean_linear_time_rmse":f["linear_time_rmse"].mean(),"mean_improvement_vs_persistence":f["improvement_vs_persistence"].mean(),"mean_improvement_vs_nearest_time":f["improvement_vs_nearest_time"].mean(),"mean_improvement_vs_linear_time":f["improvement_vs_linear_time"].mean(),"mean_test_progress_spearman":f["test_progress_spearman"].mean(),"min_permutation_p_rmse":pm["permutation_p_rmse"].min() if len(pm) else np.nan}])
     else:summary=pd.DataFrame()
 
     supported=False
     if len(summary):
-        r=summary.iloc[0]
-        supported=bool(r["n_valid_folds"]>=2 and r["mean_improvement_vs_persistence"]>0 and r["mean_improvement_vs_nearest_time"]>0 and r["mean_improvement_vs_linear_time"]>0 and r["min_permutation_p_rmse"]<0.05)
+        r=summary.iloc[0];supported=bool(r["n_valid_folds"]>=2 and r["mean_improvement_vs_persistence"]>0 and r["mean_improvement_vs_nearest_time"]>0 and r["mean_improvement_vs_linear_time"]>0 and r["min_permutation_p_rmse"]<0.05)
 
-    overall=pd.DataFrame([{"n_trajectory_datasets":len(traj),"n_valid_lodo_folds":len(f),"mean_selected_genes":float(g["n_selected_genes"].mean()) if len(g) else np.nan,"mean_state_improvement_vs_persistence":summary.iloc[0]["mean_improvement_vs_persistence"] if len(summary) else np.nan,"mean_state_improvement_vs_nearest_time":summary.iloc[0]["mean_improvement_vs_nearest_time"] if len(summary) else np.nan,"min_permutation_p_rmse":summary.iloc[0]["min_permutation_p_rmse"] if len(summary) else np.nan,"invariant_coordinate_predictive_support":supported,"stage3_readiness":False,"interpretation":"Training-only cross-dataset temporal-shape concordance; one-dimensional invariant coordinate; bootstrap axis stability; held-out one-step prediction; no ODE/state-space model"}])
+    overall=pd.DataFrame([{"n_trajectory_datasets":len(traj),"n_valid_lodo_folds":len(f),"mean_selected_genes":float(g["n_selected_genes"].mean()) if len(g) else np.nan,"mean_state_improvement_vs_persistence":summary.iloc[0]["mean_improvement_vs_persistence"] if len(summary) else np.nan,"mean_state_improvement_vs_nearest_time":summary.iloc[0]["mean_improvement_vs_nearest_time"] if len(summary) else np.nan,"min_permutation_p_rmse":summary.iloc[0]["min_permutation_p_rmse"] if len(summary) else np.nan,"invariant_coordinate_predictive_support":supported,"stage3_readiness":False,"interpretation":"Training-only cross-dataset temporal-shape concordance; one-dimensional invariant coordinate; NaN-safe training/test projection; bootstrap axis stability; held-out one-step prediction; no ODE/state-space model"}])
 
-    g.to_csv(OUT/"01_gene_selection.csv",index=False)
-    f.to_csv(OUT/"02_lodo_results.csv",index=False)
-    a.to_csv(OUT/"03_axis_stability.csv",index=False)
-    p.to_csv(OUT/"04_one_step_predictions.csv",index=False)
-    pm.to_csv(OUT/"05_permutation_null.csv",index=False)
-    summary.to_csv(OUT/"06_summary.csv",index=False)
-    overall.to_csv(OUT/"07_stage2927_summary.csv",index=False)
-    log("overall:")
-    print(overall.to_string(index=False))
-    return overall
+    g.to_csv(OUT/"01_gene_selection.csv",index=False);f.to_csv(OUT/"02_lodo_results.csv",index=False);a.to_csv(OUT/"03_axis_stability.csv",index=False);p.to_csv(OUT/"04_one_step_predictions.csv",index=False);pm.to_csv(OUT/"05_permutation_null.csv",index=False);summary.to_csv(OUT/"06_summary.csv",index=False);overall.to_csv(OUT/"07_stage2927_summary.csv",index=False)
+    log("overall:");print(overall.to_string(index=False));return overall
 
 
 if __name__=="__main__":run()
