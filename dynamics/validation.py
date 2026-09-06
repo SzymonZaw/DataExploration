@@ -99,18 +99,20 @@ def _build_matrix_column_map(matrix, metadata):
 def _print_mapping_diagnostics(matrix, metadata):
     rows = []
     for ds, g in metadata.groupby("dataset", sort=True):
-        timed = g[g.time_hours.notna()]
-        matched = g[g.matrix_column.notna()]
-        timed_matched = timed[timed.matrix_column.notna()]
+        timed = g[g["time_hours"].notna()]
+        matched = g[g["matrix_column"].notna()]
+        timed_matched = timed[timed["matrix_column"].notna()]
         rows.append({
             "dataset": ds,
-            "matrix_columns": int(sum(_normalise_name(c) in {_normalise_name(x) for x in g.sample} for c in matrix.columns)),
+            # Count actual matrix columns resolved to this dataset. Do not use
+            # g.sample here: DataFrame.sample is a method, not the sample column.
+            "matrix_columns": int(matched["matrix_column"].nunique()),
             "metadata_samples": len(g),
             "matched_samples": len(matched),
             "timed_samples": len(timed),
             "timed_matched": len(timed_matched),
-            "unique_times": int(timed_matched.time_hours.nunique()),
-            "replicates": ",".join(sorted(map(str, timed_matched.replicate.dropna().unique()))),
+            "unique_times": int(timed_matched["time_hours"].nunique()),
+            "replicates": ",".join(sorted(map(str, timed_matched["replicate"].dropna().unique()))),
         })
     diag = pd.DataFrame(rows)
     diag.to_csv(OUT / "00_mapping_diagnostics.csv", index=False)
@@ -122,14 +124,14 @@ def _print_mapping_diagnostics(matrix, metadata):
 def _trajectories(matrix, metadata, time_override=None):
     out = {}
     for ds, g in metadata.groupby("dataset"):
-        g = g[g.matrix_column.notna() & g.time_hours.notna()].copy()
+        g = g[g["matrix_column"].notna() & g["time_hours"].notna()].copy()
         if len(g) < 2:
             continue
-        times = g.time_hours.astype(float).to_numpy()
+        times = g["time_hours"].astype(float).to_numpy()
         if time_override:
-            times = np.asarray([time_override.get((ds, c), t) for c, t in zip(g.matrix_column, times)], dtype=float)
+            times = np.asarray([time_override.get((ds, c), t) for c, t in zip(g["matrix_column"], times)], dtype=float)
         frame = pd.DataFrame(
-            matrix[g.matrix_column].T.to_numpy(),
+            matrix[g["matrix_column"]].T.to_numpy(),
             index=times,
             columns=matrix.index,
         ).groupby(level=0).mean().sort_index()
@@ -168,7 +170,7 @@ def _load_common_space():
             "Stage 2.7 could not match any metadata sample to the Stage 2.6 "
             "matrix columns. See results/Dynamics/stage2_7/00_mapping_diagnostics.csv."
         )
-    return matrix, metadata[metadata.matrix_column.notna()].copy()
+    return matrix, metadata[metadata["matrix_column"].notna()].copy()
 
 
 def leave_one_dataset_out(matrix, metadata):
@@ -187,10 +189,10 @@ def leave_one_dataset_out(matrix, metadata):
             if not preds:
                 continue
             cols = metadata[
-                (metadata.dataset == test_ds)
-                & (metadata.time_hours == target)
-                & metadata.matrix_column.notna()
-            ].matrix_column.tolist()
+                (metadata["dataset"] == test_ds)
+                & (metadata["time_hours"] == target)
+                & metadata["matrix_column"].notna()
+            ]["matrix_column"].tolist()
             if not cols:
                 continue
             truth = matrix[cols].mean(axis=1).to_numpy(float)
@@ -208,23 +210,23 @@ def leave_one_replicate_out(matrix, metadata):
     """Predict a held-out replicate from other replicates in the same dataset."""
     rows = []
     for ds, g in metadata.groupby("dataset"):
-        reps = sorted(r for r in g.replicate.dropna().unique() if str(r).lower() != "unknown")
+        reps = sorted(r for r in g["replicate"].dropna().unique() if str(r).lower() != "unknown")
         if len(reps) < 2:
             continue
         for held in reps:
-            train = g[(g.replicate != held) & g.matrix_column.notna()].copy()
-            test = g[(g.replicate == held) & g.matrix_column.notna()].copy()
-            train = train[train.time_hours.notna()]
-            for target in sorted(test.time_hours.dropna().unique()):
+            train = g[(g["replicate"] != held) & g["matrix_column"].notna()].copy()
+            test = g[(g["replicate"] == held) & g["matrix_column"].notna()].copy()
+            train = train[train["time_hours"].notna()]
+            for target in sorted(test["time_hours"].dropna().unique()):
                 frame = pd.DataFrame(
-                    matrix[train.matrix_column].T.to_numpy(),
-                    index=train.time_hours.to_numpy(),
+                    matrix[train["matrix_column"]].T.to_numpy(),
+                    index=train["time_hours"].to_numpy(),
                     columns=matrix.index,
                 ).groupby(level=0).mean().sort_index()
                 pred = _interpolate(frame.to_numpy(), frame.index.to_numpy(float), float(target))
                 if pred is None:
                     continue
-                cols = test[test.time_hours == target].matrix_column.tolist()
+                cols = test[test["time_hours"] == target]["matrix_column"].tolist()
                 truth = matrix[cols].mean(axis=1).to_numpy(float)
                 rows.append({
                     "validation": "leave_one_replicate_out",
@@ -243,15 +245,15 @@ def permutation_null(matrix, metadata, n_permutations=25, seed=42):
     for permutation in range(n_permutations):
         override = {}
         for ds, g in metadata.groupby("dataset"):
-            g = g[g.time_hours.notna() & g.matrix_column.notna()]
-            vals = g.time_hours.to_numpy(float)
+            g = g[g["time_hours"].notna() & g["matrix_column"].notna()]
+            vals = g["time_hours"].to_numpy(float)
             shuffled = rng.permutation(vals)
-            for col, value in zip(g.matrix_column, shuffled):
+            for col, value in zip(g["matrix_column"], shuffled):
                 override[(ds, col)] = float(value)
         traj = _trajectories(matrix, metadata, override)
         for test_ds, _ in sorted(traj.items()):
-            test = metadata[(metadata.dataset == test_ds) & metadata.time_hours.notna() & metadata.matrix_column.notna()]
-            for target in sorted(test.time_hours.unique()):
+            test = metadata[(metadata["dataset"] == test_ds) & metadata["time_hours"].notna() & metadata["matrix_column"].notna()]
+            for target in sorted(test["time_hours"].unique()):
                 preds = []
                 for train_ds, (times, values) in traj.items():
                     if train_ds == test_ds:
@@ -261,7 +263,7 @@ def permutation_null(matrix, metadata, n_permutations=25, seed=42):
                         preds.append(p)
                 if not preds:
                     continue
-                cols = test[test.time_hours == target].matrix_column.tolist()
+                cols = test[test["time_hours"] == target]["matrix_column"].tolist()
                 truth = matrix[cols].mean(axis=1).to_numpy(float)
                 rows.append({
                     "validation": "time_permutation_null",
@@ -304,7 +306,7 @@ def stage2_7(n_permutations=25, seed=42):
     pd.DataFrame([{
         "common_genes": int(matrix.shape[0]),
         "samples": int(matrix.shape[1]),
-        "datasets": sorted(metadata.dataset.unique().tolist()),
+        "datasets": sorted(metadata["dataset"].unique().tolist()),
         "dataset_holdout_cases": len(dataset_df),
         "replicate_holdout_cases": len(replicate_df),
         "permutation_cases": len(null_df),
