@@ -1,8 +1,4 @@
-"""Stage 2.9.20: controlled repair of the common biological state space.
-
-Compares the current common gene space with harmonization variants and the
-fixed biological programs from Stage 2.9.14. Diagnostic only: no ODE.
-"""
+"""Stage 2.9.20: controlled repair of the common biological state space."""
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -64,8 +60,10 @@ def aggregate_vectors(matrix,meta,genes):
     return rows
 
 def evaluate_variant(matrix,meta,genes,variant):
-    m=matrix.loc[genes,meta.matrix_column]; X=m.T.to_numpy(float)
-    med=np.nanmedian(X,axis=0); inds=np.where(~np.isfinite(X)); X[inds]=np.take(med,inds[1]); X=StandardScaler().fit_transform(X)
+    m=matrix.loc[genes,meta.matrix_column]; X=np.array(m.T.to_numpy(float),copy=True)
+    med=np.nanmedian(X,axis=0); inds=np.where(~np.isfinite(X))
+    if len(inds[0]): X[inds]=np.take(med,inds[1])
+    X=StandardScaler().fit_transform(X)
     ncomp=min(10,X.shape[0]-1,X.shape[1]); coords=PCA(n_components=ncomp).fit_transform(X); ds=meta.dataset.to_numpy(); k=min(5,len(ds)-1)
     idx=NearestNeighbors(n_neighbors=k+1).fit(coords).kneighbors(return_distance=False)[:,1:]
     same=np.mean(np.array([[ds[j]==ds[i] for j in row] for i,row in enumerate(idx)])); props=pd.Series(ds).value_counts(normalize=True).to_numpy(); expected=float(np.sum(props**2))
