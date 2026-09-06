@@ -1,10 +1,9 @@
-"""Stage 2.9.5: latent-axis stability and PCA1 sensitivity diagnostics.
+"""Stage 2.9.5: bootstrap stability of the dataset-invariant latent axis.
 
-This stage stress-tests the already learned Stage 2.9.2 program-state axis.
-It bootstraps program dimensions (not raw genes) and refits PCA within each
-held-out fold, measuring axis stability, sign/orientation consistency, and
-whether the reported latent progress is substantially different from PC1.
-It is a robustness diagnostic, not a replacement for gene/program discovery.
+Uses full program-state trajectories persisted by Stage 2.9.2. For each
+leave-one-dataset-out fold, PCA is refit after bootstrap resampling of program
+dimensions. The held-out trajectory is projected with each axis. Reports axis
+agreement, transfer stability, orientation, and individual-program sensitivity.
 """
 from pathlib import Path
 import numpy as np
@@ -12,150 +11,63 @@ import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
-ROOT = Path(__file__).resolve().parents[1]
-IN = ROOT / "results" / "Dynamics" / "stage2_9_2"
-OUT = ROOT / "results" / "Dynamics" / "stage2_9_5"
-OUT.mkdir(parents=True, exist_ok=True)
+ROOT=Path(__file__).resolve().parents[1]
+IN=ROOT/"results"/"Dynamics"/"stage2_9_2"
+OUT=ROOT/"results"/"Dynamics"/"stage2_9_5"
+OUT.mkdir(parents=True,exist_ok=True)
 
+def corr(a,b,method="spearman"):
+    a=np.asarray(a,float);b=np.asarray(b,float);ok=np.isfinite(a)&np.isfinite(b)
+    if ok.sum()<3 or np.std(a[ok])<1e-12 or np.std(b[ok])<1e-12:return np.nan
+    return float(pd.Series(a[ok]).corr(pd.Series(b[ok]),method=method))
 
-def _corr(a, b, method="spearman"):
-    a = np.asarray(a, float); b = np.asarray(b, float)
-    ok = np.isfinite(a) & np.isfinite(b)
-    if ok.sum() < 3 or np.std(a[ok]) < 1e-12 or np.std(b[ok]) < 1e-12:
-        return np.nan
-    return float(pd.Series(a[ok]).corr(pd.Series(b[ok]), method=method))
+def fit_axis(X):
+    X=np.asarray(X,float);med=np.nanmedian(X,axis=0);X=np.where(np.isfinite(X),X,med);X=np.where(np.isfinite(X),X,0.0)
+    if X.shape[0]<3 or X.shape[1]<2:return None,None
+    sc=StandardScaler().fit(X);pc=PCA(n_components=1,random_state=42).fit(sc.transform(X));return sc,pc
 
+def project(X,sc,pc):
+    X=np.asarray(X,float);med=np.nanmedian(X,axis=0);X=np.where(np.isfinite(X),X,med);X=np.where(np.isfinite(X),X,0.0);return pc.transform(sc.transform(X))[:,0]
 
-def _pca_axis(X, rng):
-    X = np.asarray(X, float)
-    med = np.nanmedian(X, axis=0)
-    X = np.where(np.isfinite(X), X, med)
-    X = np.where(np.isfinite(X), X, 0.0)
-    if X.shape[0] < 3 or X.shape[1] < 2:
-        return None
-    Xs = StandardScaler().fit_transform(X)
-    pca = PCA(n_components=1, random_state=int(rng.integers(0, 2**31 - 1))).fit(Xs)
-    return pca.transform(Xs)[:, 0]
+def normalize(z,ref):
+    lo,hi=np.nanpercentile(ref,[2.5,97.5])
+    if hi<=lo:lo,hi=np.nanmin(ref),np.nanmax(ref)
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi<=lo:return np.full(len(z),.5)
+    return np.clip((z-lo)/(hi-lo),0,1)
 
-
-def _prepare_fold(g):
-    g = g.sort_values("time_hours")
-    time = g["normalized_time"].to_numpy(float)
-    z = g["latent_progress"].to_numpy(float)
-    # Stage 2.9.2 currently stores one latent coordinate only. Treat each
-    # held-out trajectory as the observed reference and bootstrap its scalar
-    # axis for sampling uncertainty; PCA sensitivity is evaluated against the
-    # training orientation metadata when available.
-    return time, z
-
-
-def run(bootstrap_replicates=500, seed=42):
-    traj_path = IN / "02_latent_progress_trajectories.csv"
-    summary_path = IN / "01_latent_progress_summary.csv"
-    if not traj_path.exists() or not summary_path.exists():
-        raise RuntimeError("Run Stage 2.9.2 first: python validate_pipeline.py --stage292")
-
-    traj = pd.read_csv(traj_path)
-    summ = pd.read_csv(summary_path)
-    required = {"held_out_dataset", "normalized_time", "latent_progress"}
-    missing = required - set(traj.columns)
-    if missing:
-        raise RuntimeError(f"Stage 2.9.2 trajectory file is missing columns: {sorted(missing)}")
-
-    rng = np.random.default_rng(seed)
-    boot_rows = []
-    fold_rows = []
-
-    for ds, g in traj.groupby("held_out_dataset", sort=True):
-        t, z = _prepare_fold(g)
-        ref = _corr(t, z, "spearman")
-        ref_p = _corr(t, z, "pearson")
-        vals_s, vals_p = [], []
+def run(bootstrap_replicates=500,seed=42):
+    state_path=IN/"04_program_state_trajectories.csv";traj_path=IN/"02_latent_progress_trajectories.csv"
+    if not state_path.exists() or not traj_path.exists():raise RuntimeError("Run Stage 2.9.2 first: python validate_pipeline.py --stage292")
+    state=pd.read_csv(state_path);reported=pd.read_csv(traj_path);rng=np.random.default_rng(seed)
+    programs=sorted([c for c in state.columns if c.startswith("program_")])
+    if len(programs)<2:raise RuntimeError("Stage 2.9.2 did not persist enough program-state columns.")
+    boots=[];folds=[];deletions=[]
+    for ds in sorted(state.held_out_dataset.astype(str).unique()):
+        fold=state[state.held_out_dataset.astype(str)==ds];train=fold[fold.dataset.astype(str)!=ds].sort_values(["dataset","time_hours"]);test=fold[fold.dataset.astype(str)==ds].sort_values("time_hours")
+        rep=reported[reported.held_out_dataset.astype(str)==ds].sort_values("time_hours");rz=rep.latent_progress.to_numpy(float);rt=rep.normalized_time.to_numpy(float)
+        sc,pc=fit_axis(train[programs].to_numpy(float))
+        if pc is None or len(test)<3:continue
+        base_tr=project(train[programs],sc,pc);base_te=project(test[programs],sc,pc);base=normalize(base_te,base_tr);base_loading=pc.components_[0]
+        base_r=corr(rz,base,"pearson")
         for b in range(bootstrap_replicates):
-            idx = rng.integers(0, len(g), len(g))
-            bs = _corr(t[idx], z[idx], "spearman")
-            bp = _corr(t[idx], z[idx], "pearson")
-            vals_s.append(bs); vals_p.append(bp)
-            boot_rows.append({"held_out_dataset": ds, "bootstrap": b, "spearman": bs, "pearson": bp})
-        s = pd.Series(vals_s, dtype=float).dropna(); p = pd.Series(vals_p, dtype=float).dropna()
-        fold_rows.append({
-            "held_out_dataset": ds,
-            "n_timepoints": len(g),
-            "observed_spearman": ref,
-            "observed_pearson": ref_p,
-            "bootstrap_valid_fraction": len(s) / bootstrap_replicates,
-            "spearman_mean": s.mean() if len(s) else np.nan,
-            "spearman_p05": s.quantile(.05) if len(s) else np.nan,
-            "spearman_p95": s.quantile(.95) if len(s) else np.nan,
-            "pearson_mean": p.mean() if len(p) else np.nan,
-            "pearson_p05": p.quantile(.05) if len(p) else np.nan,
-            "pearson_p95": p.quantile(.95) if len(p) else np.nan,
-            "spearman_ci_excludes_zero": bool(s.quantile(.05) > 0) if len(s) else False,
-            "pearson_ci_excludes_zero": bool(p.quantile(.05) > 0) if len(p) else False,
-        })
+            idx=rng.integers(0,len(programs),len(programs));scb,pcb=fit_axis(train[programs].to_numpy(float)[:,idx])
+            if pcb is None:continue
+            load=pcb.components_[0];sim=float(np.dot(load,base_loading)/(np.linalg.norm(load)*np.linalg.norm(base_loading))) if np.linalg.norm(load)>0 else np.nan
+            zbtr=project(train[programs].to_numpy(float)[:,idx],scb,pcb);zbte=project(test[programs].to_numpy(float)[:,idx],scb,pcb)
+            if np.isfinite(sim) and sim<0:sim=-sim;zbtr=-zbtr;zbte=-zbte
+            zn=normalize(zbte,zbtr)
+            boots.append({"held_out_dataset":ds,"bootstrap":b,"axis_cosine_similarity":sim,"reported_progress_spearman":corr(rz,zn),"reported_progress_pearson":corr(rz,zn,"pearson"),"time_spearman":corr(rt,zn)})
+        for col in programs:
+            keep=[c for c in programs if c!=col];scd,pcd=fit_axis(train[keep].to_numpy(float))
+            if pcd is None:continue
+            zdtr=project(train[keep],scd,pcd);zdte=project(test[keep],scd,pcd);zn=normalize(zdte,zdtr)
+            deletions.append({"held_out_dataset":ds,"excluded_program":col,"reported_progress_spearman":corr(rz,zn),"reported_progress_pearson":corr(rz,zn,"pearson")})
+        bg=pd.DataFrame([x for x in boots if x["held_out_dataset"]==ds]);folds.append({"held_out_dataset":ds,"n_training_rows":len(train),"n_test_timepoints":len(test),"n_programs":len(programs),"recomputed_pca1_vs_reported_progress_pearson":base_r,"bootstrap_axis_cosine_mean":bg.axis_cosine_similarity.mean(),"bootstrap_axis_cosine_p05":bg.axis_cosine_similarity.quantile(.05),"bootstrap_axis_cosine_p95":bg.axis_cosine_similarity.quantile(.95),"bootstrap_progress_spearman_mean":bg.reported_progress_spearman.mean(),"bootstrap_progress_spearman_p05":bg.reported_progress_spearman.quantile(.05),"bootstrap_progress_spearman_p95":bg.reported_progress_spearman.quantile(.95),"bootstrap_progress_ci_excludes_zero":bool(bg.reported_progress_spearman.quantile(.05)>0)})
+        print(f"Stage 2.9.5: fold {ds} ({bootstrap_replicates} program bootstraps)",flush=True)
+    boot=pd.DataFrame(boots);fold=pd.DataFrame(folds);delete=pd.DataFrame(deletions)
+    boot.to_csv(OUT/"02_program_bootstrap.csv",index=False);fold.to_csv(OUT/"03_fold_axis_stability.csv",index=False);delete.to_csv(OUT/"04_program_deletion_sensitivity.csv",index=False)
+    summary=pd.DataFrame([{"n_datasets":len(fold),"mean_axis_cosine":fold.bootstrap_axis_cosine_mean.mean() if not fold.empty else np.nan,"min_axis_cosine_p05":fold.bootstrap_axis_cosine_p05.min() if not fold.empty else np.nan,"n_folds_progress_ci_excludes_zero":int(fold.bootstrap_progress_ci_excludes_zero.sum()) if not fold.empty else 0,"mean_bootstrap_progress_spearman":fold.bootstrap_progress_spearman_mean.mean() if not fold.empty else np.nan,"mean_recomputed_pca1_vs_reported_progress_pearson":fold.recomputed_pca1_vs_reported_progress_pearson.mean() if not fold.empty else np.nan,"interpretation":"program-dimension bootstrap; gene/program discovery itself is not fully refit in every bootstrap"}])
+    summary.to_csv(OUT/"01_overall_summary.csv",index=False)
+    print("Stage 2.9.5: fold results",flush=True);print(fold.to_string(index=False),flush=True);print("\nStage 2.9.5 summary",flush=True);print(summary.to_string(index=False),flush=True);print("Stage 2.9.5 complete. This is a robustness gate; do not fit ODE/state-space yet if axis stability remains weak.",flush=True);return summary
 
-    boot = pd.DataFrame(boot_rows)
-    folds = pd.DataFrame(fold_rows)
-    boot.to_csv(OUT / "02_latent_progress_bootstrap.csv", index=False)
-    folds.to_csv(OUT / "03_latent_axis_stability_by_dataset.csv", index=False)
-
-    # Orientation diagnostic: Stage 2.9.2 stores the training PC1/time
-    # correlation. A negative value means the learned axis had to be flipped.
-    orientation_cols = [c for c in ["held_out_dataset", "train_pc1_time_correlation"] if c in summ.columns]
-    orientation = summ[orientation_cols].copy() if orientation_cols else pd.DataFrame()
-    if not orientation.empty:
-        orientation["axis_orientation"] = np.where(
-            pd.to_numeric(orientation["train_pc1_time_correlation"], errors="coerce") >= 0,
-            "positive", "flipped"
-        )
-        orientation["absolute_train_time_correlation"] = pd.to_numeric(
-            orientation["train_pc1_time_correlation"], errors="coerce"
-        ).abs()
-    orientation.to_csv(OUT / "04_axis_orientation.csv", index=False)
-
-    # Direct comparison with the Stage 2.9.2 reported latent progress. Because
-    # Stage 2.9.2 does not persist the full program-state matrix, this is a
-    # conservative scalar sensitivity analysis rather than a gene-bootstrap.
-    comparison = []
-    for ds, g in traj.groupby("held_out_dataset", sort=True):
-        t, z = _prepare_fold(g)
-        comparison.append({
-            "held_out_dataset": ds,
-            "latent_progress_spearman": _corr(t, z, "spearman"),
-            "latent_progress_pearson": _corr(t, z, "pearson"),
-            "n_timepoints": len(g),
-        })
-    comparison = pd.DataFrame(comparison)
-    comparison.to_csv(OUT / "05_pca1_comparison_note.csv", index=False)
-
-    mean_s = float(np.nanmean(folds["observed_spearman"])) if not folds.empty else np.nan
-    mean_p = float(np.nanmean(folds["observed_pearson"])) if not folds.empty else np.nan
-    n_excl_s = int(folds["spearman_ci_excludes_zero"].sum()) if not folds.empty else 0
-    n_excl_p = int(folds["pearson_ci_excludes_zero"].sum()) if not folds.empty else 0
-    abs_train = orientation["absolute_train_time_correlation"].dropna() if not orientation.empty else pd.Series(dtype=float)
-    summary = pd.DataFrame([{
-        "n_datasets": len(folds),
-        "mean_observed_spearman": mean_s,
-        "mean_observed_pearson": mean_p,
-        "n_spearman_bootstrap_ci_excludes_zero": n_excl_s,
-        "n_pearson_bootstrap_ci_excludes_zero": n_excl_p,
-        "mean_absolute_train_pc1_time_correlation": abs_train.mean() if len(abs_train) else np.nan,
-        "median_absolute_train_pc1_time_correlation": abs_train.median() if len(abs_train) else np.nan,
-        "bootstrap_replicates": bootstrap_replicates,
-        "interpretation": "axis stability remains uncertain when held-out trajectories have only 4-8 timepoints; no ODE/state-space claim",
-    }])
-    summary.to_csv(OUT / "01_overall_summary.csv", index=False)
-
-    print("Stage 2.9.5: latent-axis stability", flush=True)
-    print(folds.to_string(index=False), flush=True)
-    if not orientation.empty:
-        print("\nStage 2.9.5: training-axis orientation", flush=True)
-        print(orientation.to_string(index=False), flush=True)
-    print("\nStage 2.9.5 summary", flush=True)
-    print(summary.to_string(index=False), flush=True)
-    print("Stage 2.9.5 complete. This is a robustness gate; it does not yet justify mechanistic ODE fitting.", flush=True)
-    return summary
-
-
-if __name__ == "__main__":
-    run()
+if __name__=="__main__":run()
