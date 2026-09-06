@@ -1,13 +1,4 @@
-"""Run independent validation milestones.
-
-Default mode is fast and reuses the existing Stage 2.6 common gene space.
-Use --refresh to rebuild Stage 2.6, --stage28 for Stage 2.8, --stage29
-for Stage 2.9, --stage291 for robust invariant temporal programs, --stage292
-for latent dataset-invariant reprogramming progress, --stage293 for fast
-latent-progress bootstrap stability, --stage294 for cross-dataset robustness,
---stage295 for program-axis bootstrap/PCA stability, and --stage296 for
-consensus biological-program stabilization.
-"""
+"""Run independent validation milestones."""
 from pathlib import Path
 import argparse
 import re
@@ -60,15 +51,7 @@ def _write_dataset_roles():
 
 def _parse_args():
     p=argparse.ArgumentParser(description="Run DataExploration validation stages.")
-    p.add_argument("--refresh",action="store_true")
-    p.add_argument("--stage28",action="store_true")
-    p.add_argument("--stage29",action="store_true")
-    p.add_argument("--stage291",action="store_true")
-    p.add_argument("--stage292",action="store_true")
-    p.add_argument("--stage293",action="store_true")
-    p.add_argument("--stage294",action="store_true")
-    p.add_argument("--stage295",action="store_true")
-    p.add_argument("--stage296",action="store_true")
+    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297"):p.add_argument(f"--{name}",action="store_true")
     return p.parse_args()
 
 def _require_common_space():
@@ -84,21 +67,25 @@ def main():
             print("WARNING: new Stage 2.6 mapping is insufficient; keeping the last valid common-space files.")
     _require_common_space()
     if args.stage28:
-        print("Using existing Stage 2.6 common space. Skipping Stage 2.6 and Stage 2.7.\n\nRunning Stage 2.8 cross-dataset diagnostics...");print(f"Stage 2.8 result: {stage2_8()}");return
+        print("Running Stage 2.8 cross-dataset diagnostics...");print(f"Stage 2.8 result: {stage2_8()}");return
     if args.stage29:
-        print("Using existing Stage 2.6 common space. Skipping Stage 2.6 through Stage 2.8.\n\nRunning Stage 2.9 leakage-free invariant module-state validation...");from dynamics.stage29 import stage2_9;print(f"Stage 2.9 result: {stage2_9()}");return
+        from dynamics.stage29 import stage2_9;print(f"Stage 2.9 result: {stage2_9()}");return
     if args.stage291:
-        print("Using existing Stage 2.6 common space. Skipping Stage 2.6 through Stage 2.9.\n\nRunning Stage 2.9.1 robust invariant temporal-program validation...");from dynamics.stage291 import stage2_9_1;print(f"Stage 2.9.1 result: {stage2_9_1()}");return
+        from dynamics.stage291 import stage2_9_1;print(f"Stage 2.9.1 result: {stage2_9_1()}");return
     if args.stage292:
-        print("Using existing Stage 2.6 common space. Skipping Stage 2.6 through Stage 2.9.1.\n\nRunning Stage 2.9.2 latent dataset-invariant reprogramming progress validation...");from dynamics.stage292 import stage2_9_2;print(f"Stage 2.9.2 result: {stage2_9_2()}");return
+        from dynamics.stage292 import stage2_9_2;print(f"Stage 2.9.2 result: {stage2_9_2()}");return
     if args.stage293:
-        print("Using existing Stage 2.6 common space. Skipping Stage 2.6 through Stage 2.9.2.\n\nRunning FAST Stage 2.9.3 latent-progress stability and permutation validation...");from dynamics.stage293_progress import run;print(f"Stage 2.9.3 result: {run()}");return
+        from dynamics.stage293_progress import run;print(f"Stage 2.9.3 result: {run()}");return
     if args.stage294:
-        print("Using existing Stage 2.9.3 outputs. Skipping Stage 2.6 through Stage 2.9.3.\n\nRunning Stage 2.9.4 cross-dataset latent-progress robustness diagnostics...");from dynamics.stage294 import run;print(f"Stage 2.9.4 result: {run()}");return
+        from dynamics.stage294 import run;print(f"Stage 2.9.4 result: {run()}");return
     if args.stage295:
-        print("Using existing Stage 2.9.2 outputs. Skipping Stage 2.6 through Stage 2.9.4.\n\nRunning Stage 2.9.5 program-axis bootstrap/PCA stability diagnostics...");from dynamics.stage295 import run;print(f"Stage 2.9.5 result: {run()}");return
+        from dynamics.stage295 import run;print(f"Stage 2.9.5 result: {run()}");return
     if args.stage296:
-        print("Using existing Stage 2.9.1 fold discoveries. Skipping Stage 2.6 through Stage 2.9.5.\n\nRunning Stage 2.9.6 consensus biological-program stabilization...");from dynamics.stage296 import run;print(f"Stage 2.9.6 result: {run()}");return
-    _recover_legacy_metadata();_write_dataset_roles();print("Running Stage 2.7 independent validation using existing Stage 2.6 common space...");summary=stage2_7();print("\nStage 2.7 summary:");print(summary.to_string(index=False))
+        from dynamics.stage296 import run;print(f"Stage 2.9.6 result: {run()}");return
+    if args.stage297:
+        print("Using existing Stage 2.6/2.9.6 outputs. Skipping Stage 2.6 through Stage 2.9.6.\n\nRunning Stage 2.9.7 biologically anchored consensus-state validation...")
+        from dynamics.stage297 import run
+        print(f"Stage 2.9.7 result: {run()}");return
+    _recover_legacy_metadata();_write_dataset_roles();summary=stage2_7();print(summary.to_string(index=False))
 
 if __name__=="__main__":main()
