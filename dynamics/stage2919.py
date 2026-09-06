@@ -19,8 +19,7 @@ OUT = ROOT / "results" / "Dynamics" / "stage2_9_19"
 OUT.mkdir(parents=True, exist_ok=True)
 TARGET = ["GSE67462", "GSE28688", "GSE297234"]
 
-def log(x):
-    print(f"Stage 2.9.19: {x}", flush=True)
+def log(x): print(f"Stage 2.9.19: {x}", flush=True)
 
 def _load():
     from dynamics.validation import _load_common_space
@@ -28,6 +27,7 @@ def _load():
     metadata = metadata[metadata.dataset.isin(TARGET)].copy()
     cols = [c for c in metadata.matrix_column if c in matrix.columns]
     metadata = metadata[metadata.matrix_column.isin(cols)].copy()
+    metadata = metadata.set_index("matrix_column").loc[cols].reset_index()
     return matrix.loc[:, cols], metadata
 
 def _sample_table(matrix, meta):
@@ -62,13 +62,14 @@ def pca_mixing(matrix, meta, n_components=10):
     X = StandardScaler().fit_transform(X)
     pca = PCA(n_components=min(n_components, X.shape[0]-1, X.shape[1])).fit_transform(X)
     ds = meta.dataset.to_numpy()
-    # kNN mixing: fraction of neighbours from the same dataset. Lower is better.
     k = min(5, len(ds) - 1)
     nn = NearestNeighbors(n_neighbors=k + 1).fit(pca)
     idx = nn.kneighbors(return_distance=False)[:, 1:]
     same = np.mean(np.array([[ds[j] == ds[i] for j in row] for i, row in enumerate(idx)]))
+    proportions = pd.Series(ds).value_counts(normalize=True).to_numpy()
+    expected = float(np.sum(proportions ** 2))
     rows = [{"metric": "mean_same_dataset_knn_fraction", "value": float(same), "k": k},
-            {"metric": "expected_same_dataset_fraction", "value": float(np.mean(pd.Series(ds).value_counts(normalize=True).to_numpy() ** 1)), "k": k}]
+            {"metric": "expected_same_dataset_fraction", "value": expected, "k": k}]
     coords = pd.DataFrame(pca, columns=[f"PC{i+1}" for i in range(pca.shape[1])])
     coords["dataset"] = ds
     coords["sample"] = meta["sample"].to_numpy()
@@ -79,7 +80,7 @@ def pca_mixing(matrix, meta, n_components=10):
     return out, coords
 
 def dataset_predictability(coords):
-    X = coords.filter(regex=r"^PC\\d+$").to_numpy(float)
+    X = coords.filter(regex=r"^PC\d+$").to_numpy(float)
     y = coords.dataset.to_numpy()
     result = {"accuracy": np.nan, "n_samples": len(y), "n_datasets": len(np.unique(y)), "status": "insufficient"}
     counts = pd.Series(y).value_counts()
@@ -93,7 +94,6 @@ def dataset_predictability(coords):
     return out
 
 def variance_decomposition(matrix, meta):
-    # Gene-level ANOVA-like R2: dataset-only, time-only, and additive dataset+time.
     rows = []
     d = pd.get_dummies(meta.dataset, dtype=float).to_numpy()
     t = meta.time_hours.to_numpy(float)
@@ -150,6 +150,7 @@ def run():
         "mean_matched_time_pearson": float(agreement.pearson.mean()) if len(agreement) else np.nan,
         "median_matched_time_pearson": float(agreement.pearson.median()) if len(agreement) else np.nan,
         "mean_same_dataset_knn_fraction": float(mix.loc[mix.metric=="mean_same_dataset_knn_fraction","value"].iloc[0]),
+        "expected_same_dataset_fraction": float(mix.loc[mix.metric=="expected_same_dataset_fraction","value"].iloc[0]),
         "dataset_predictability_accuracy": float(pred.accuracy.iloc[0]) if len(pred) else np.nan,
         "median_gene_r2_dataset": float(var.r2_dataset.median()) if len(var) else np.nan,
         "median_gene_r2_time": float(var.r2_time.median()) if len(var) else np.nan,
