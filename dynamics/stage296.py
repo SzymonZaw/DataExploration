@@ -25,33 +25,22 @@ def _corr(a,b,method="spearman"):
 
 
 def _load():
-    m=pd.read_csv(COMMON/"06_common_human_gene_matrix.csv",index_col=0)
-    meta=pd.read_csv(COMMON/"07_common_gene_sample_metadata.csv")
+    # Reuse Stage 2.7's canonical loader rather than reading Stage 2.6 CSVs
+    # directly. It reconstructs time_hours, sample labels, and legacy
+    # dataset-block matrix mappings consistently across all stages.
+    from .validation import _load_common_space
+    m,meta=_load_common_space()
     mem=pd.read_csv(IN/"02_program_membership.csv")
     return m,meta,mem
 
 
 def _time(meta,ds,c):
-    """Resolve sample time without assuming a particular metadata schema.
-
-    Stage 2.6 metadata evolved over the project and some cached common-space
-    files do not contain a literal ``time_hours`` column.  Prefer it when
-    present; otherwise use the canonical Stage 2.7 resolver so dataset-specific
-    sample/time conventions (notably GSE28688 and GSE67462) stay consistent.
-    """
+    """Resolve time from the canonical validation metadata."""
     q=meta[(meta["dataset"].astype(str)==str(ds))&(meta["matrix_column"].astype(str)==str(c))]
     if q.empty:return np.nan
-    if "time_hours" in q.columns:
-        value=pd.to_numeric(q.iloc[0]["time_hours"],errors="coerce")
-        if pd.notna(value):return float(value)
-    try:
-        from .validation import _time_hours_for_validation, _strip_dataset_prefix
-        sample=q.iloc[0]["sample"] if "sample" in q.columns else c
-        row_index=int(q.index[0]) if str(ds)=="GSE28688" else None
-        value=_time_hours_for_validation(str(ds),_strip_dataset_prefix(sample),row_index)
-        return float(value) if pd.notna(value) else np.nan
-    except Exception:
-        return np.nan
+    if "time_hours" not in q.columns:return np.nan
+    value=pd.to_numeric(q.iloc[0]["time_hours"],errors="coerce")
+    return float(value) if pd.notna(value) else np.nan
 
 
 def _trajectory(matrix,meta,ds,genes):
