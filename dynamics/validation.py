@@ -55,11 +55,14 @@ def _load_common_space():
         raise FileNotFoundError("Stage 2.6 outputs are missing; run Dynamics.py first.")
     matrix = pd.read_csv(matrix_path, index_col=0).apply(pd.to_numeric, errors="coerce")
     metadata = pd.read_csv(meta_path)
-    metadata["matrix_column"] = metadata.dataset.astype(str) + "__" + metadata.sample.astype(str)
+    # Do not use metadata.dataset.sample: DataFrame.sample is a method.
+    metadata["dataset"] = metadata["dataset"].astype(str)
+    metadata["sample"] = metadata["sample"].astype(str)
+    metadata["matrix_column"] = metadata["dataset"] + "__" + metadata["sample"]
     from Dynamics import time_hours, condition, replicate
-    metadata["time_hours"] = [time_hours(d, s) for d, s in zip(metadata.dataset, metadata.sample)]
-    metadata["condition"] = [condition(d, s) for d, s in zip(metadata.dataset, metadata.sample)]
-    metadata["replicate"] = [replicate(s) for s in metadata.sample]
+    metadata["time_hours"] = [time_hours(d, s) for d, s in zip(metadata["dataset"], metadata["sample"])]
+    metadata["condition"] = [condition(d, s) for d, s in zip(metadata["dataset"], metadata["sample"])]
+    metadata["replicate"] = [replicate(s) for s in metadata["sample"]]
     return matrix, metadata[metadata.matrix_column.isin(matrix.columns)].copy()
 
 
