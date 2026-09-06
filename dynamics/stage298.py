@@ -11,6 +11,7 @@ runs do not need to repeat requests.
 """
 from pathlib import Path
 import json
+import os
 import ssl
 import time
 import urllib.error
@@ -38,47 +39,75 @@ def _log(msg):
     print(f"Stage 2.9.8: {msg}", flush=True)
 
 
-def _ssl_context():
-    """Use certifi when available to avoid broken local CA stores on Windows."""
+def _ssl_context(verify=True):
+    """Build an HTTPS context, preferring certifi on Windows."""
+    if not verify:
+        return ssl._create_unverified_context()
     if certifi is not None:
         return ssl.create_default_context(cafile=certifi.where())
     return ssl.create_default_context()
 
 
+def _allow_insecure_fallback():
+    """Permit a last-resort TLS fallback for broken local CA stores.
+
+    This is intentionally opt-in via STAGE298_INSECURE_SSL=1. The normal path
+    always verifies certificates. The fallback is useful on isolated Windows
+    installations where Python's CA bundle is intercepted by enterprise TLS.
+    """
+    return os.environ.get("STAGE298_INSECURE_SSL", "0").strip() == "1"
+
+
 def _request_json(url, payload, timeout=90, retries=2):
     body = json.dumps(payload).encode("utf-8")
-    context = _ssl_context()
-    for attempt in range(retries + 1):
-        try:
-            req = urllib.request.Request(
-                url,
-                data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "DataExploration-stage2.9.8/1.1",
-                },
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=timeout, context=context) as r:
-                return json.loads(r.read().decode("utf-8"))
-        except Exception as exc:
-            if attempt >= retries:
-                _log(f"request failed after {retries + 1} attempts: {exc}")
-                return None
-            time.sleep(2 ** attempt)
+    contexts = [_ssl_context(True)]
+    if _allow_insecure_fallback():
+        contexts.append(_ssl_context(False))
+    for context_i, context in enumerate(contexts):
+        for attempt in range(retries + 1):
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "DataExploration-stage2.9.8/1.2",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=timeout, context=context) as r:
+                    return json.loads(r.read().decode("utf-8"))
+            except Exception as exc:
+                if attempt >= retries:
+                    if context_i == 0 and len(contexts) > 1:
+                        _log(f"verified TLS failed; retrying once with certificate verification disabled: {exc}")
+                    else:
+                        _log(f"request failed after {retries + 1} attempts: {exc}")
+                else:
+                    time.sleep(2 ** attempt)
     return None
 
 
 def _request_text(url, data=None, timeout=90, method="GET"):
-    context = _ssl_context()
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"User-Agent": "DataExploration-stage2.9.8/1.1"},
-        method=method,
-    )
-    with urllib.request.urlopen(req, timeout=timeout, context=context) as r:
-        return r.read().decode("utf-8")
+    contexts = [_ssl_context(True)]
+    if _allow_insecure_fallback():
+        contexts.append(_ssl_context(False))
+    last_exc = None
+    for context_i, context in enumerate(contexts):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"User-Agent": "DataExploration-stage2.9.8/1.2"},
+                method=method,
+            )
+            with urllib.request.urlopen(req, timeout=timeout, context=context) as r:
+                return r.read().decode("utf-8")
+        except Exception as exc:
+            last_exc = exc
+            if context_i == 0 and len(contexts) > 1:
+                _log(f"verified TLS failed for {url}; retrying with certificate verification disabled")
+    raise last_exc
 
 
 def _load_genes():
@@ -185,7 +214,6 @@ def _resolve_library(preferred):
     for name in available:
         if str(name).upper() == preferred_upper:
             return name
-    # Enrichr library names change over time; choose a current close match.
     tokens = {
         "MSigDB_Hallmark_2020": ("MSIGDB", "HALLMARK"),
         "ChEA_2022": ("CHEA",),
@@ -212,11 +240,7 @@ def _enrichr(gene_list, library, label):
     genes = "\n".join(gene_list)
     try:
         data = urllib.parse.urlencode({"list": genes, "description": f"DataExploration {label}"}).encode("utf-8")
-        raw = _request_text(
-            "https://maayanlab.cloud/Enrichr/addList",
-            data=data,
-            method="POST",
-        )
+        raw = _request_text("https://maayanlab.cloud/Enrichr/addList", data=data, method="POST")
         added = json.loads(raw)
         user_list_id = added.get("userListId")
         if not user_list_id:
@@ -276,6 +300,8 @@ def _program_summary(go, reactome, kegg, hallmark, tf):
 
 def run():
     _log("starting biological annotation; no ODE/state-space model is fitted")
+    if _allow_insecure_fallback():
+        _log("WARNING: STAGE298_INSECURE_SSL=1; HTTPS certificate verification may be bypassed if normal TLS fails")
     sets, background, rec = _load_genes()
     all_go, all_reactome, all_kegg = [], [], []
     for label, genes in sets.items():
