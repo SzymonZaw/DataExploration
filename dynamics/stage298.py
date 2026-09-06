@@ -56,14 +56,6 @@ def _request_json(url, payload, timeout=90, retries=2):
             }, method="POST")
             with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context(True)) as r:
                 return json.loads(r.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            last_exc = exc
-            try:
-                detail = exc.read().decode("utf-8", errors="replace")
-                _log(f"HTTP {exc.code} from enrichment API: {detail[:1000]}")
-            except Exception:
-                pass
-            break
         except urllib.error.URLError as exc:
             last_exc = exc
             if insecure and attempt == 0 and isinstance(exc.reason, ssl.SSLCertVerificationError):
@@ -76,14 +68,6 @@ def _request_json(url, payload, timeout=90, retries=2):
                     }, method="POST")
                     with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context(False)) as r:
                         return json.loads(r.read().decode("utf-8"))
-                except urllib.error.HTTPError as exc2:
-                    last_exc = exc2
-                    try:
-                        detail = exc2.read().decode("utf-8", errors="replace")
-                        _log(f"HTTP {exc2.code} from enrichment API: {detail[:1000]}")
-                    except Exception:
-                        pass
-                    break
                 except Exception as exc2:
                     last_exc = exc2
             if attempt < retries:
@@ -131,36 +115,65 @@ def _gprofiler(gene_list, background, label):
         "output": "json",
     }
     _log(f"g:Profiler enrichment for {label} ({len(gene_list):,} genes)...")
-    data = _request_json("https://biit.cs.ut.ee/gprofiler/api/gost/profile/", payload)
-    if data is not None:
-        try:
-            cache.write_text(json.dumps(data), encoding="utf-8")
-        except Exception:
-            pass
-    return data
+    return _request_json("https://biit.cs.ut.ee/gprofiler/api/gost/profile/", payload)
 
 
-def _flatten_intersections(value):
-    """Return a clean comma-separated gene list from g:Profiler intersections."""
-    out = []
+def _query_gene_names(data, fallback_genes):
+    """Return query gene names aligned with g:Profiler intersection rows.
 
-    def visit(x):
-        if isinstance(x, (list, tuple, set)):
-            for item in x:
-                visit(item)
-        elif x is not None:
-            s = str(x).strip()
-            if s:
-                out.append(s)
+    The current API documents ``intersections`` as a list of lists aligned to
+    ``meta.genes_metadata.query.<query_name>.ensgs``.  Older code treated the
+    nested lists themselves as gene names, which produced outputs such as
+    ``REAC`` or evidence codes instead of the intersecting genes.
+    """
+    if not isinstance(data, dict):
+        return list(fallback_genes)
+    meta = data.get("meta", {}) or {}
+    qmeta = meta.get("genes_metadata", {}).get("query", {}) or {}
+    if not qmeta:
+        return list(fallback_genes)
+    qname = next(iter(qmeta), None)
+    entry = qmeta.get(qname, {}) or {}
+    ensgs = entry.get("ensgs") or []
+    mapping = entry.get("mapping") or {}
+    names = []
+    for value in ensgs:
+        key = str(value)
+        mapped = mapping.get(key) if isinstance(mapping, dict) else None
+        if isinstance(mapped, list):
+            names.append(str(mapped[0]) if mapped else key)
+        elif mapped:
+            names.append(str(mapped))
+        else:
+            names.append(key)
+    return names or list(fallback_genes)
 
-    visit(value)
-    return ",".join(dict.fromkeys(out))
+
+def _flatten_intersections(intersections, query_names):
+    """Convert API's nested intersection representation to gene names."""
+    if not isinstance(intersections, list):
+        return ""
+    hits = []
+    for i, item in enumerate(intersections):
+        if item is None:
+            continue
+        if isinstance(item, list):
+            present = len(item) > 0
+        else:
+            present = bool(item)
+        if present:
+            if i < len(query_names):
+                hits.append(str(query_names[i]))
+            elif isinstance(item, str):
+                hits.append(item)
+    return ",".join(dict.fromkeys(hits))
 
 
-def _flatten_gprofiler(data, label):
+def _flatten_gprofiler(data, label, fallback_genes):
     rows = []
     if not data:
         return pd.DataFrame()
+    query_names = _query_gene_names(data, fallback_genes)
     for r in data.get("result", []):
         rows.append({
             "gene_set": label,
@@ -174,7 +187,7 @@ def _flatten_gprofiler(data, label):
             "p_value": r.get("p_value"),
             "precision": r.get("precision"),
             "recall": r.get("recall"),
-            "intersection_genes": _flatten_intersections(r.get("intersections", [])),
+            "intersection_genes": _flatten_intersections(r.get("intersections", []), query_names),
         })
     return pd.DataFrame(rows)
 
@@ -200,7 +213,7 @@ def run():
     all_go, all_reactome, all_kegg = [], [], []
     for label, genes in sets.items():
         data = _gprofiler(genes, background, label)
-        flat = _flatten_gprofiler(data, label)
+        flat = _flatten_gprofiler(data, label, genes)
         if len(flat):
             all_go.append(flat[flat.source.eq("GO:BP")])
             all_reactome.append(flat[flat.source.eq("REAC")])
