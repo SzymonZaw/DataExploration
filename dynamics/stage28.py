@@ -23,7 +23,7 @@ def traj(ds,matrix,meta):
 
 def interp(frame,t):
     if t<frame.index.min() or t>frame.index.max():return None
-    x=frame.index.to_numpy(float); y=frame.to_numpy(float)
+    x=frame.index.to_numpy(float); y=frame.to_numpy()
     return np.asarray([np.interp(t,x,y[:,j]) for j in range(y.shape[1])])
 
 def run_diagnostics(matrix,meta):
@@ -49,6 +49,42 @@ def time_coverage(meta):
         n=t.nunique(); rows.append(dict(dataset=ds,n_samples=len(g),n_timed=len(t),n_unique_times=n,min_time_hours=t.min() if len(t) else np.nan,max_time_hours=t.max() if len(t) else np.nan,coverage_span_hours=t.max()-t.min() if len(t) else np.nan,role="trajectory" if n>=2 else ("single_timepoint" if n==1 else "context_only")))
     return pd.DataFrame(rows)
 
+def gene_temporal_concordance(matrix,meta):
+    """Score each gene by cross-dataset agreement of its temporal profile.
+
+    For every pair of trajectory datasets, only exact overlapping timepoints are
+    used. Scores are computed per gene and then aggregated across pairs. This is
+    a diagnostic/selection score, not a claim of biological equivalence.
+    """
+    ts={d:traj(d,matrix,meta) for d in sorted(meta.dataset.unique())}
+    ts={d:f for d,f in ts.items() if f is not None and len(f.index)>=2}
+    genes=list(matrix.index)
+    pairs=[]
+    for i,a in enumerate(sorted(ts)):
+        for b in sorted(ts)[i+1:]:
+            common=sorted(set(ts[a].index).intersection(ts[b].index))
+            if len(common)>=3:pairs.append((a,b,common))
+    print(f"Stage 2.8: gene concordance across {len(pairs)} dataset pairs and {len(genes)} genes...")
+    accum={g:[] for g in genes}
+    for pi,(a,b,common) in enumerate(pairs,1):
+        xa=ts[a].loc[common].to_numpy(float); xb=ts[b].loc[common].to_numpy(float)
+        for j,g in enumerate(genes):
+            va=xa[:,j]; vb=xb[:,j]; ok=np.isfinite(va)&np.isfinite(vb)
+            if ok.sum()<3 or np.std(va[ok])==0 or np.std(vb[ok])==0: continue
+            r=float(np.corrcoef(va[ok],vb[ok])[0,1])
+            sign=float(np.sign(np.sum(np.diff(va[ok])*np.diff(vb[ok]))))
+            accum[g].append((r,sign))
+        print(f"  pair {pi}/{len(pairs)}: {a} vs {b}, overlap={len(common)}",flush=True)
+    rows=[]
+    for g,vals in accum.items():
+        if not vals: continue
+        corr=np.asarray([v[0] for v in vals],float); signs=np.asarray([v[1] for v in vals],float)
+        rows.append(dict(gene=g,n_pairs=len(vals),mean_correlation=float(np.mean(corr)),median_correlation=float(np.median(corr)),positive_pair_fraction=float(np.mean(corr>0)),directional_agreement=float(np.mean(signs>0)),concordance_score=float(np.mean(corr)*np.mean(signs>0))) )
+    out=pd.DataFrame(rows)
+    if not out.empty: out=out.sort_values(["concordance_score","median_correlation","n_pairs"],ascending=[False,False,False]).reset_index(drop=True)
+    out.to_csv(OUT/"04_gene_concordance_ranked.csv",index=False)
+    return out
+
 def stage2_8():
     from .validation import _load_common_space
     print("Stage 2.8: loading validated common gene space...")
@@ -60,8 +96,11 @@ def stage2_8():
         s=per.groupby("dataset").agg(n_cases=("time_hours","size"),mean_rmse=("cross_dataset_rmse","mean"),mean_mae=("cross_dataset_mae","mean"),mean_correlation=("cross_dataset_correlation","mean"),mean_nearest_rmse=("nearest_time_baseline_rmse","mean"),mean_rmse_improvement=("rmse_improvement_vs_nearest","mean")).reset_index()
     else:s=pd.DataFrame()
     s.to_csv(OUT/"03_per_dataset_summary.csv",index=False)
+    gene=gene_temporal_concordance(matrix,meta)
+    print(f"Stage 2.8: wrote {len(gene)} gene concordance scores.")
     print("Stage 2.8 complete.")
     print("Per-dataset summary:"); print(s.to_string(index=False) if not s.empty else "No diagnostics available.")
+    if not gene.empty: print("Top gene concordance scores:"); print(gene.head(20).to_string(index=False))
     return s
 
 if __name__=="__main__": stage2_8()
