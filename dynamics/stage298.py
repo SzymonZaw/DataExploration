@@ -5,17 +5,25 @@ across independent Stage 2.9.1 discovery folds have coherent biology.
 
 Primary enrichment uses g:Profiler with the 11,899-gene common human space as
 background. GO Biological Process, Reactome and KEGG are requested directly.
-Hallmark and transcription-factor enrichment are attempted through Enrichr;
-those are optional and fail gracefully when network access is unavailable.
-Results are cached locally so repeated runs do not need to repeat requests.
+Hallmark and transcription-factor enrichment are optional and fail gracefully
+when network access is unavailable. Results are cached locally so repeated
+runs do not need to repeat requests.
 """
 from pathlib import Path
 import json
+import ssl
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+
 import numpy as np
 import pandas as pd
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - standard-library fallback
+    certifi = None
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMON = ROOT / "results" / "Dynamics" / "stage2_6"
@@ -30,17 +38,28 @@ def _log(msg):
     print(f"Stage 2.9.8: {msg}", flush=True)
 
 
+def _ssl_context():
+    """Use certifi when available to avoid broken local CA stores on Windows."""
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
+
+
 def _request_json(url, payload, timeout=90, retries=2):
     body = json.dumps(payload).encode("utf-8")
+    context = _ssl_context()
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(
                 url,
                 data=body,
-                headers={"Content-Type": "application/json", "User-Agent": "DataExploration-stage2.9.8/1.0"},
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "DataExploration-stage2.9.8/1.1",
+                },
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(req, timeout=timeout, context=context) as r:
                 return json.loads(r.read().decode("utf-8"))
         except Exception as exc:
             if attempt >= retries:
@@ -50,15 +69,28 @@ def _request_json(url, payload, timeout=90, retries=2):
     return None
 
 
+def _request_text(url, data=None, timeout=90, method="GET"):
+    context = _ssl_context()
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"User-Agent": "DataExploration-stage2.9.8/1.1"},
+        method=method,
+    )
+    with urllib.request.urlopen(req, timeout=timeout, context=context) as r:
+        return r.read().decode("utf-8")
+
+
 def _load_genes():
     rec = pd.read_csv(IN / "02_gene_recurrence.csv")
     rec["gene"] = rec["gene"].astype(str).str.upper().str.strip()
     rec["n_discovery_folds"] = pd.to_numeric(rec["n_discovery_folds"], errors="coerce").fillna(0).astype(int)
     background = pd.read_csv(COMMON / "06_common_human_gene_matrix.csv", index_col=0).index.astype(str).str.upper().tolist()
     background = sorted(set(background))
+    background_set = set(background)
     sets = {
-        "recurrence_ge_2": sorted(set(rec.loc[rec.n_discovery_folds >= 2, "gene"])),
-        "recurrence_ge_3": sorted(set(rec.loc[rec.n_discovery_folds >= 3, "gene"])),
+        "recurrence_ge_2": sorted(set(rec.loc[(rec.n_discovery_folds >= 2) & rec.gene.isin(background_set), "gene"])),
+        "recurrence_ge_3": sorted(set(rec.loc[(rec.n_discovery_folds >= 3) & rec.gene.isin(background_set), "gene"])),
     }
     _log(f"loaded {len(background):,} background genes")
     _log(f"consensus sets: >=2 folds = {len(sets['recurrence_ge_2']):,}; >=3 folds = {len(sets['recurrence_ge_3']):,}")
@@ -110,9 +142,68 @@ def _flatten_gprofiler(data, label):
     return pd.DataFrame(rows)
 
 
+def _enrichr_libraries():
+    """Return currently available Enrichr library names, if the API permits it."""
+    cache = CACHE / "enrichr_libraries.json"
+    if cache.exists():
+        try:
+            return json.loads(cache.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    try:
+        raw = _request_text("https://maayanlab.cloud/Enrichr/datasetStatistics")
+        data = json.loads(raw)
+        names = []
+        if isinstance(data, list):
+            for row in data:
+                if isinstance(row, dict):
+                    name = row.get("libraryName") or row.get("library")
+                    if name:
+                        names.append(str(name))
+        elif isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, dict) and (value.get("libraryName") or value.get("library")):
+                    names.append(str(value.get("libraryName") or value.get("library")))
+                elif isinstance(key, str):
+                    names.append(key)
+        names = sorted(set(names))
+        if names:
+            cache.write_text(json.dumps(names), encoding="utf-8")
+        return names
+    except Exception as exc:
+        _log(f"could not query Enrichr library list: {exc}")
+        return []
+
+
+def _resolve_library(preferred):
+    available = _enrichr_libraries()
+    if not available:
+        return None
+    if preferred in available:
+        return preferred
+    preferred_upper = preferred.upper()
+    for name in available:
+        if str(name).upper() == preferred_upper:
+            return name
+    # Enrichr library names change over time; choose a current close match.
+    tokens = {
+        "MSigDB_Hallmark_2020": ("MSIGDB", "HALLMARK"),
+        "ChEA_2022": ("CHEA",),
+    }.get(preferred, ())
+    for name in available:
+        upper = str(name).upper()
+        if tokens and all(token in upper for token in tokens):
+            return name
+    return None
+
+
 def _enrichr(gene_list, library, label):
-    """Optional Enrichr enrichment; returns empty frame on unavailable network."""
-    cache = CACHE / f"enrichr_{label}_{library}.json"
+    """Optional Enrichr enrichment; returns empty frame on unavailable network/API."""
+    resolved = _resolve_library(library)
+    if not resolved:
+        _log(f"Enrichr {library}: no compatible current library name found; skipping")
+        return []
+    cache = CACHE / f"enrichr_{label}_{resolved}.json"
     if cache.exists():
         try:
             return json.loads(cache.read_text(encoding="utf-8"))
@@ -121,25 +212,27 @@ def _enrichr(gene_list, library, label):
     genes = "\n".join(gene_list)
     try:
         data = urllib.parse.urlencode({"list": genes, "description": f"DataExploration {label}"}).encode("utf-8")
-        req = urllib.request.Request(
+        raw = _request_text(
             "https://maayanlab.cloud/Enrichr/addList",
             data=data,
-            headers={"User-Agent": "DataExploration-stage2.9.8/1.0"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=90) as r:
-            added = json.loads(r.read().decode("utf-8"))
+        added = json.loads(raw)
         user_list_id = added.get("userListId")
         if not user_list_id:
+            _log(f"Enrichr {resolved}: addList returned no userListId")
             return []
-        url = "https://maayanlab.cloud/Enrichr/enrich?" + urllib.parse.urlencode({"userListId": user_list_id, "backgroundType": library})
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "DataExploration-stage2.9.8/1.0"}), timeout=90) as r:
-            data = json.loads(r.read().decode("utf-8"))
-        rows = data.get(library, [])
+        url = "https://maayanlab.cloud/Enrichr/enrich?" + urllib.parse.urlencode({"userListId": user_list_id, "backgroundType": resolved})
+        raw = _request_text(url)
+        data = json.loads(raw)
+        rows = data.get(resolved, [])
         cache.write_text(json.dumps(rows), encoding="utf-8")
         return rows
+    except urllib.error.HTTPError as exc:
+        _log(f"Enrichr {resolved} unavailable: HTTP {exc.code}")
+        return []
     except Exception as exc:
-        _log(f"Enrichr {library} unavailable: {exc}")
+        _log(f"Enrichr {resolved} unavailable: {exc}")
         return []
 
 
@@ -184,17 +277,17 @@ def _program_summary(go, reactome, kegg, hallmark, tf):
 def run():
     _log("starting biological annotation; no ODE/state-space model is fitted")
     sets, background, rec = _load_genes()
-    all_go, all_hallmark, all_tf = [], [], []
+    all_go, all_reactome, all_kegg = [], [], []
     for label, genes in sets.items():
         gp = _gprofiler(genes, background, label)
         flat = _flatten_gprofiler(gp, label)
         if len(flat):
             all_go.append(flat[flat.source.eq("GO:BP")].copy())
-            all_hallmark.append(flat[flat.source.eq("REAC")].copy())
-            all_tf.append(flat[flat.source.eq("KEGG")].copy())
+            all_reactome.append(flat[flat.source.eq("REAC")].copy())
+            all_kegg.append(flat[flat.source.eq("KEGG")].copy())
     go = pd.concat([x for x in all_go if len(x)], ignore_index=True) if any(len(x) for x in all_go) else pd.DataFrame()
-    reactome = pd.concat([x for x in all_hallmark if len(x)], ignore_index=True) if any(len(x) for x in all_hallmark) else pd.DataFrame()
-    kegg = pd.concat([x for x in all_tf if len(x)], ignore_index=True) if any(len(x) for x in all_tf) else pd.DataFrame()
+    reactome = pd.concat([x for x in all_reactome if len(x)], ignore_index=True) if any(len(x) for x in all_reactome) else pd.DataFrame()
+    kegg = pd.concat([x for x in all_kegg if len(x)], ignore_index=True) if any(len(x) for x in all_kegg) else pd.DataFrame()
     hallmark_rows, tf_rows = [], []
     for label, genes in sets.items():
         hallmark_rows.extend(_flatten_enrichr(_enrichr(genes, "MSigDB_Hallmark_2020", label), label, "MSigDB_Hallmark_2020").to_dict("records"))
