@@ -95,8 +95,15 @@ def mygene_map(ids, scopes, species, fields, cache_name):
     ids = sorted(set(str(x) for x in ids if str(x)))
     out = _cache_read(cache_name)
     missing = [x for x in ids if x not in out]
+    total_batches = (len(missing) + 199) // 200
+    if missing:
+        print(f"    MyGene: {len(ids)} IDs, {len(missing)} uncached -> {total_batches} batches", flush=True)
+    else:
+        print(f"    MyGene: all {len(ids)} IDs loaded from cache", flush=True)
     for start in range(0, len(missing), 200):
         batch = missing[start:start+200]
+        batch_no = start // 200 + 1
+        print(f"    MyGene batch {batch_no}/{total_batches} ({len(batch)} IDs)...", flush=True)
         form = urllib.parse.urlencode({"q": ",".join(batch), "scopes": scopes, "fields": fields, "species": species, "size": len(batch)})
         ok = False
         for attempt in range(3):
@@ -108,10 +115,14 @@ def mygene_map(ids, scopes, species, fields, cache_name):
                     sym = normalize_symbol(hit.get("symbol"))
                     if q and sym: out[q] = sym
                 ok = True
+                print(f"      OK: {len(hits)} hits; mapped cache now {len(out)}", flush=True)
                 break
             except Exception as exc:
-                if attempt == 2: print(f"  MyGene {cache_name} batch {start//200+1} failed: {exc}")
-                else: time.sleep(1.0 + attempt)
+                if attempt == 2:
+                    print(f"      FAILED after 3 attempts: {exc}", flush=True)
+                else:
+                    print(f"      retry {attempt+2}/3 after error: {exc}", flush=True)
+                    time.sleep(1.0 + attempt)
         if ok and start + 200 < len(missing): time.sleep(0.05)
     _cache_write(cache_name, out)
     return out
@@ -121,9 +132,16 @@ def mouse_refseq_human_map(ids):
     ids = sorted(set(clean_refseq(x) for x in ids))
     out = _cache_read("mouse_refseq_human.csv")
     missing = [x for x in ids if x not in out]
+    total_batches = (len(missing) + 199) // 200
+    if missing:
+        print(f"    MyGene mouse orthology: {len(ids)} IDs, {len(missing)} uncached -> {total_batches} batches", flush=True)
+    else:
+        print(f"    MyGene mouse orthology: all {len(ids)} IDs loaded from cache", flush=True)
     # MyGene supplies HomoloGene/orthology information for mouse RefSeq.
     for start in range(0, len(missing), 200):
         batch = missing[start:start+200]
+        batch_no = start // 200 + 1
+        print(f"    MyGene mouse batch {batch_no}/{total_batches} ({len(batch)} IDs)...", flush=True)
         form = urllib.parse.urlencode({"q": ",".join(batch), "scopes": "refseq.rna", "fields": "homologene", "species": "mouse", "size": len(batch)})
         try:
             obj = json.loads(_request("https://mygene.info/v3/query", data=form))
@@ -133,10 +151,12 @@ def mouse_refseq_human_map(ids):
                 genes = hom.get("genes", []) if isinstance(hom, dict) else []
                 human = [str(p[1]) for p in genes if isinstance(p,(list,tuple)) and len(p)>=2 and str(p[0])=="9606"]
                 if human: out[q] = "ENTREZ:" + human[0]
+            print(f"      OK: {len(hits)} hits; ortholog cache now {len(out)}", flush=True)
         except Exception as exc:
-            print(f"  MyGene mouse orthology batch {start//200+1} failed: {exc}")
+            print(f"      FAILED: {exc}", flush=True)
         time.sleep(0.05)
     entrez = sorted({v.split(":",1)[1] for v in out.values() if str(v).startswith("ENTREZ:")})
+    print(f"    Resolving {len(entrez)} human Entrez IDs to symbols...", flush=True)
     symbols = mygene_map(entrez, "entrezgene", "human", "symbol", "human_entrez_symbol.csv")
     for q, v in list(out.items()):
         if str(v).startswith("ENTREZ:"):
@@ -148,7 +168,11 @@ def mouse_refseq_human_map(ids):
 
 def platform_mapping(gpl):
     p = CACHE / f"{gpl}_platform_mapping.tsv"
-    if p.exists(): return pd.read_csv(p, sep="\t", dtype=str).fillna("")
+    if p.exists():
+        cached = pd.read_csv(p, sep="\t", dtype=str).fillna("")
+        print(f"    {gpl}: platform annotation loaded from cache ({len(cached)} probes)", flush=True)
+        return cached
+    print(f"    {gpl}: downloading NCBI GEO platform annotation...", flush=True)
     text = _request(f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={gpl}&targ=self&view=full&form=text", timeout=120)
     m = re.search(r"!platform_table_begin\n(.*?)\n!platform_table_end", text, re.S)
     if not m: raise RuntimeError(f"No platform table for {gpl}")
@@ -160,11 +184,14 @@ def platform_mapping(gpl):
     out = pd.DataFrame({"feature":tab[idcol].astype(str),"human_gene":tab[symcol].map(normalize_symbol)})
     out = out.dropna(subset=["human_gene"]).drop_duplicates("feature")
     out.to_csv(p, sep="\t", index=False)
+    print(f"    {gpl}: annotation cached ({len(out)} probes with symbols)", flush=True)
     return out
 
 
 def map_dataset(ds, path):
+    print(f"  [{ds}] loading feature matrix: {path}", flush=True)
     raw = read_feature_matrix(path)
+    print(f"  [{ds}] loaded {len(raw)} features x {raw.shape[1]} samples", flush=True)
     acc = {}
     mapped = 0
     if ds in PLATFORMS:
@@ -189,6 +216,7 @@ def map_dataset(ds, path):
             if gene: acc.setdefault(gene, []).append(row.to_numpy(float)); mapped += 1
         source = "Ensembl_MyGene+direct_symbol"
     mat = pd.DataFrame({g:np.mean(v,axis=0) for g,v in acc.items()}, index=raw.columns).T if acc else pd.DataFrame(index=[],columns=raw.columns)
+    print(f"  [{ds}] mapping complete: {mapped}/{len(raw)} features -> {len(acc)} genes", flush=True)
     return raw,mat,mapped,len(raw)-mapped,len(acc),source
 
 
@@ -199,8 +227,10 @@ def _atomic(df,path,index=True):
 
 
 def stage2_6_robust(min_genes=1000,min_datasets=4):
+    print("Stage 2.6 progress: starting dataset-by-dataset mapping", flush=True)
     audits=[]; matrices={}
-    for ds,path in FEATURE_FILES.items():
+    for i,(ds,path) in enumerate(FEATURE_FILES.items(),1):
+        print(f"\nStage 2.6 [{i}/{len(FEATURE_FILES)}]: {ds}", flush=True)
         try:
             raw,mat,mapped,unmapped,genes,source=map_dataset(ds,path)
             matrices[ds]=mat
@@ -208,15 +238,17 @@ def stage2_6_robust(min_genes=1000,min_datasets=4):
         except Exception as exc:
             matrices[ds]=pd.DataFrame()
             audits.append({"dataset":ds,"n_features":0,"n_samples":0,"mapped_features":0,"unmapped_features":0,"mapped_genes":0,"mapping_coverage":0.0,"mapping_source":"failed","status":f"failed:{type(exc).__name__}"})
-            print(f"Stage 2.6 {ds} failed: {type(exc).__name__}: {exc}")
+            print(f"Stage 2.6 {ds} failed: {type(exc).__name__}: {exc}", flush=True)
+        print(f"Stage 2.6 progress: finished {ds} ({i}/{len(FEATURE_FILES)})", flush=True)
     audit=pd.DataFrame(audits); _atomic(audit,STAGE26/"05_mapping_audit.csv",False)
     valid={d:m for d,m in matrices.items() if isinstance(m,pd.DataFrame) and not m.empty and len(m.index)>0}
     common=set.intersection(*(set(m.index) for m in valid.values())) if valid else set()
-    print(f"Stage 2.6: common human genes={len(common)}, contributing datasets={len(valid)}")
+    print(f"Stage 2.6: common human genes={len(common)}, contributing datasets={len(valid)}", flush=True)
     if len(common)<min_genes or len(valid)<min_datasets:
-        print("WARNING: insufficient new common space; previous validated files preserved.")
+        print("WARNING: insufficient new common space; previous validated files preserved.", flush=True)
         return {"status":"insufficient_common_human_gene_space","common_genes":len(common),"contributing_datasets":len(valid)}
     genes=sorted(common); blocks=[]; meta=[]
+    print(f"Stage 2.6: building common matrix from {len(genes)} genes...", flush=True)
     for ds,m in valid.items():
         b=m.loc[genes].copy()
         b=b.apply(lambda r:(r-r.mean())/r.std(ddof=0) if r.std(ddof=0)>0 else np.nan,axis=1)
@@ -226,4 +258,5 @@ def stage2_6_robust(min_genes=1000,min_datasets=4):
     _atomic(pd.DataFrame(meta),STAGE26/"07_common_gene_sample_metadata.csv",False)
     decision=pd.DataFrame([{"common_human_genes":len(genes),"datasets_contributing":len(valid),"status":"sufficient_common_human_gene_space","time_used_for_feature_space":False}])
     _atomic(decision,STAGE26/"08_stage26_decision.csv",False)
+    print("Stage 2.6: new common space written successfully.", flush=True)
     return {"status":"sufficient_common_human_gene_space","common_genes":len(genes),"contributing_datasets":len(valid)}
