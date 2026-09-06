@@ -5,6 +5,7 @@ import pandas as pd
 
 from dynamics.stage26_v2 import stage2_6_robust
 from dynamics.validation import stage2_7
+from dynamics.stage28 import stage2_8
 from Dynamics import PCA_FILES, GSE28688_ROW_SAMPLE
 
 ROOT = Path(__file__).resolve().parent
@@ -60,3 +61,5 @@ if __name__ == "__main__":
     _recover_legacy_metadata(); _write_dataset_roles()
     print("Running Stage 2.7 independent validation...")
     summary=stage2_7(); print("\nStage 2.7 summary:"); print(summary.to_string(index=False))
+    print("\nRunning Stage 2.8 cross-dataset diagnostics...")
+    stage2_8()
