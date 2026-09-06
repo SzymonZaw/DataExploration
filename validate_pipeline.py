@@ -3,8 +3,8 @@
 Default mode is fast and reuses the existing Stage 2.6 common gene space.
 Use --refresh to rebuild Stage 2.6, --stage28 for Stage 2.8, --stage29
 for Stage 2.9, --stage291 for robust invariant temporal programs, --stage292
-for latent dataset-invariant reprogramming progress, and --stage293 for
-fast latent-progress bootstrap stability and conditional permutation validation.
+for latent dataset-invariant reprogramming progress, --stage293 for fast
+latent-progress bootstrap stability, and --stage294 for cross-dataset robustness.
 """
 from pathlib import Path
 import argparse
@@ -72,6 +72,7 @@ def _parse_args():
     parser.add_argument("--stage291", action="store_true", help="Run only Stage 2.9.1 robust invariant temporal-program validation with permutation null.")
     parser.add_argument("--stage292", action="store_true", help="Run only Stage 2.9.2 latent dataset-invariant reprogramming progress validation with permutation null.")
     parser.add_argument("--stage293", action="store_true", help="Run only the fast Stage 2.9.3 latent-progress bootstrap stability and 1000-permutation conditional null validation.")
+    parser.add_argument("--stage294", action="store_true", help="Run only Stage 2.9.4 cross-dataset latent-progress robustness diagnostics using Stage 2.9.3 outputs.")
     return parser.parse_args()
 
 
@@ -131,6 +132,14 @@ def main():
         from dynamics.stage293_progress import run
         result = run()
         print(f"Stage 2.9.3 result: {result}")
+        return
+
+    if args.stage294:
+        print("Using existing Stage 2.9.3 outputs. Skipping Stage 2.6 through Stage 2.9.3.")
+        print("\nRunning Stage 2.9.4 cross-dataset latent-progress robustness diagnostics...")
+        from dynamics.stage294 import run
+        result = run()
+        print(f"Stage 2.9.4 result: {result}")
         return
 
     _recover_legacy_metadata(); _write_dataset_roles()
