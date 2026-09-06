@@ -31,7 +31,7 @@ def _candidate_column_names(dataset,sample):
     return [sm,raw,f"{ds}__{raw}",f"{ds}_{raw}",f"{ds}/{raw}"]
 
 def _build_matrix_column_map(matrix,metadata):
-    actual=list(matrix.columns); normalised={}; ambiguous=set()
+    actual=[str(c) for c in matrix.columns]; normalised={}; ambiguous=set()
     for col in actual:
         key=_normalise_name(col)
         if key in normalised and normalised[key]!=col: ambiguous.add(key)
@@ -44,17 +44,37 @@ def _build_matrix_column_map(matrix,metadata):
             if key in normalised and key not in ambiguous: found=normalised[key]; break
         resolved.append(found)
     metadata["matrix_column"]=resolved
-    matched=int(metadata["matrix_column"].notna().sum())
-    if matched==0 and len(actual)==len(metadata):
-        numeric_like=all(re.fullmatch(r"\d+(?:\.0+)?",str(c).strip()) for c in actual)
-        if numeric_like:
-            metadata["matrix_column"]=actual
-            print(f"Stage 2.7: recovered {len(actual)} legacy matrix columns by metadata order.")
+
+    # Stage 2.6 legacy files use deterministic columns such as
+    # GSE148158__0 ... GSE148158__12.  These are not sample labels, so
+    # recover the mapping from dataset block + row order rather than guessing.
+    recovered=0
+    for ds,idxs in metadata.groupby("dataset",sort=False).groups.items():
+        idxs=list(idxs)
+        prefix=f"{ds}__"
+        cols=[c for c in actual if c.startswith(prefix)]
+        def suffix(c):
+            m=re.search(r"__(\d+)$",c)
+            return int(m.group(1)) if m else 10**9
+        cols=sorted(cols,key=suffix)
+        missing=[i for i in idxs if pd.isna(metadata.at[i,"matrix_column"])]
+        if len(cols)==len(idxs) and missing:
+            for pos,idx in enumerate(idxs):
+                metadata.at[idx,"matrix_column"]=cols[pos]
+            recovered+=len(idxs)
+        elif len(cols)==len(missing) and missing:
+            unused=[c for c in cols if c not in set(metadata.loc[metadata["dataset"]==ds,"matrix_column"].dropna())]
+            for idx,col in zip(missing,unused): metadata.at[idx,"matrix_column"]=col; recovered+=1
+    if recovered: print(f"Stage 2.7: recovered {recovered} legacy dataset-block matrix mappings.")
+
+    if metadata["matrix_column"].notna().sum()==0 and len(actual)==len(metadata):
+        metadata["matrix_column"]=actual
+        print(f"Stage 2.7: recovered {len(actual)} legacy matrix columns by global metadata order.")
     return metadata
 
 def _time_from_text(dataset,sample):
     s=_strip_dataset_prefix(sample).lower().replace("_"," ").replace("-"," ")
-    patterns={"GSE148158":[(r"48\s*h|48h|day\s*2",48.),(r"72\s*h|72h|day\s*3",72.)],"GSE52052":[(r"day\s*11|11\s*d|11d",264.)],"GSE67462":[(r"day\s*0\b|d\s*0\b|0\s*h",0.),(r"day\s*1\b|d\s*1\b|24\s*h|24h",24.),(r"day\s*3\b|d\s*3\b|72\s*h|72h",72.),(r"day\s*5\b|d\s*5\b|120\s*h|120h",120.),(r"day\s*7\b|d\s*7\b|168\s*h|168h",168.),(r"day\s*11\b|d\s*11\b|264\s*h|264h",264.),(r"day\s*15\b|d\s*15\b|360\s*h|360h",360.),(r"day\s*18\b|d\s*18\b|432\s*h|432h",432.)],"GSE297234":[(r"d\s*0\b|day\s*0\b",0.),(r"d\s*3\b|day\s*3\b",72.),(r"d\s*7\b|day\s*7\b",168.),(r"d\s*10\b|day\s*10\b",240.)],"GSE28688":[(r"24\s*h|24h",24.),(r"48\s*h|48h",48.),(r"72\s*h|72h",72.)]}
+    patterns={"GSE148158":[(r"48\s*h|48h|day\s*2|48",48.),(r"72\s*h|72h|day\s*3|72",72.)],"GSE52052":[(r"day\s*11|11\s*d|11d",264.)],"GSE67462":[(r"day\s*0\b|d\s*0\b|0\s*h",0.),(r"day\s*1\b|d\s*1\b|24\s*h|24h",24.),(r"day\s*3\b|d\s*3\b|72\s*h|72h",72.),(r"day\s*5\b|d\s*5\b|120\s*h|120h",120.),(r"day\s*7\b|d\s*7\b|168\s*h|168h",168.),(r"day\s*11\b|d\s*11\b|264\s*h|264h",264.),(r"day\s*15\b|d\s*15\b|360\s*h|360h",360.),(r"day\s*18\b|d\s*18\b|432\s*h|432h",432.)],"GSE297234":[(r"d\s*0\b|day\s*0\b",0.),(r"d\s*3\b|day\s*3\b",72.),(r"d\s*7\b|day\s*7\b",168.),(r"d\s*10\b|day\s*10\b",240.)],"GSE28688":[(r"24\s*h|24h",24.),(r"48\s*h|48h",48.),(r"72\s*h|72h",72.)]}
     for p,v in patterns.get(dataset,[]):
         if re.search(p,s): return v
     return np.nan
@@ -80,10 +100,12 @@ def _recover_ordered_sample_labels(metadata):
             if ds=="GSE28688" and len(labels)==14: labels=list(GSE28688_ROW_SAMPLE)
         except Exception: continue
         idxs=list(idxs)
+        if len(labels)!=len(idxs): continue
         for pos,idx in enumerate(idxs):
-            sample=str(metadata.at[idx,"sample"]); raw=_strip_dataset_prefix(sample)
-            if re.fullmatch(r"\d+",raw) and pos<len(labels): metadata.at[idx,"sample"]=labels[pos]; recovered+=1
-    if recovered: print(f"Stage 2.7: recovered {recovered} legacy sample labels from PCA/GEO order.")
+            old=str(metadata.at[idx,"sample"]); new=labels[pos]
+            if old!=new:
+                metadata.at[idx,"sample"]=new; recovered+=1
+    if recovered: print(f"Stage 2.7: recovered {recovered} sample labels from PCA/GEO order.")
     return metadata
 
 def _print_mapping_diagnostics(matrix,metadata):
