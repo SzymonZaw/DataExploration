@@ -47,12 +47,17 @@ def _recover_legacy_metadata():
 def _write_dataset_roles():
     if not COMMON_METADATA.exists(): return pd.DataFrame()
     metadata=pd.read_csv(COMMON_METADATA)
-    from Dynamics import time_hours
+    from dynamics.validation import _time_hours_for_validation, _strip_dataset_prefix
     rows=[]
     for ds,g in metadata.groupby("dataset",sort=True):
-        timed=pd.Series([time_hours(ds,s) for s in g["sample"].astype(str)]).dropna(); unique=sorted(set(float(x) for x in timed))
+        times=[]
+        for row_index, sample in enumerate(g["sample"].astype(str)):
+            idx=row_index if ds=="GSE28688" else None
+            t=_time_hours_for_validation(ds,_strip_dataset_prefix(sample),idx)
+            if pd.notna(t): times.append(float(t))
+        unique=sorted(set(times))
         role="trajectory" if len(unique)>=2 else "single_timepoint" if len(unique)==1 else "context_only"
-        rows.append({"dataset":ds,"n_samples":len(g),"n_timed_samples":len(timed),"n_unique_times":len(unique),"time_hours":",".join(map(str,unique)),"role":role})
+        rows.append({"dataset":ds,"n_samples":len(g),"n_timed_samples":len(times),"n_unique_times":len(unique),"time_hours":",".join(map(str,unique)),"role":role})
     out=pd.DataFrame(rows); out.to_csv(ROOT/"results/Dynamics/stage2_7/00_dataset_roles.csv",index=False)
     print("\nStage 2.7 dataset roles:"); print(out.to_string(index=False)); return out
 
