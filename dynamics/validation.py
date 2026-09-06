@@ -80,6 +80,36 @@ def _time_hours_for_validation(dataset,sample,row_index=None,gsm_time=None):
     return _time_from_text(dataset,raw)
 
 
+def _recover_ordered_sample_labels(metadata):
+    """Recover sample IDs when an older Stage 2.6 matrix used numeric columns.
+
+    Older Stage 2.6 runs could lose column labels during row-wise z-scoring,
+    leaving metadata such as GSE148158__0. The original PCA outputs preserve
+    sample order, so use them only as a label-recovery fallback.
+    """
+    try:
+        from Dynamics import PCA_FILES, GSE28688_ROW_SAMPLE
+    except Exception:
+        return metadata
+    metadata=metadata.copy(); recovered=0
+    for ds,idxs in metadata.groupby("dataset",sort=False).groups.items():
+        if ds not in PCA_FILES or not PCA_FILES[ds].exists(): continue
+        try:
+            pca=pd.read_csv(PCA_FILES[ds],index_col=0)
+            labels=[str(x) for x in pca.index]
+            if ds=="GSE28688" and len(labels)==14: labels=list(GSE28688_ROW_SAMPLE)
+        except Exception:
+            continue
+        idxs=list(idxs)
+        for pos,idx in enumerate(idxs):
+            sample=str(metadata.at[idx,"sample"])
+            raw=_strip_dataset_prefix(sample)
+            if re.fullmatch(r"\d+",raw) and pos<len(labels):
+                metadata.at[idx,"sample"]=labels[pos]; recovered+=1
+    if recovered: print(f"Stage 2.7: recovered {recovered} sample labels from PCA file order.")
+    return metadata
+
+
 def _print_mapping_diagnostics(matrix,metadata):
     rows=[]
     for ds,g in metadata.groupby("dataset",sort=True):
@@ -94,6 +124,7 @@ def _load_common_space():
     if not mp.exists() or not pp.exists(): raise FileNotFoundError("Stage 2.6 outputs are missing; run Dynamics.py first.")
     matrix=pd.read_csv(mp,index_col=0).apply(pd.to_numeric,errors="coerce"); metadata=pd.read_csv(pp)
     metadata["dataset"]=metadata["dataset"].astype(str); metadata["sample"]=metadata["sample"].astype(str)
+    metadata=_recover_ordered_sample_labels(metadata)
     from Dynamics import condition,replicate,GSM_TIME
     times=[]; conditions=[]; replicates=[]; row_counts={}
     for ds,sample in zip(metadata.dataset,metadata["sample"]):
