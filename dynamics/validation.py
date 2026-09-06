@@ -50,21 +50,11 @@ def _candidate_column_names(dataset, sample):
     """Generate conservative aliases used by Stage 2.6/sample files."""
     ds = str(dataset).strip().strip('"')
     sm = str(sample).strip().strip('"')
-    return [
-        sm,
-        f"{ds}__{sm}",
-        f"{ds}_{sm}",
-        f"{ds}/{sm}",
-    ]
+    return [sm, f"{ds}__{sm}", f"{ds}_{sm}", f"{ds}/{sm}"]
 
 
 def _build_matrix_column_map(matrix, metadata):
-    """Resolve metadata rows to actual Stage 2.6 matrix columns.
-
-    Stage 2.6 output has historically used more than one sample-label
-    convention. Stage 2.7 must therefore match against the columns that
-    actually exist, rather than assuming ``dataset__sample``.
-    """
+    """Resolve metadata rows to actual Stage 2.6 matrix columns."""
     actual = list(matrix.columns)
     normalised = {}
     ambiguous = set()
@@ -78,10 +68,9 @@ def _build_matrix_column_map(matrix, metadata):
     resolved = []
     statuses = []
     for _, row in metadata.iterrows():
-        ds, sm = row["dataset"], row["sample"]
         found = None
         method = "unmatched"
-        for candidate in _candidate_column_names(ds, sm):
+        for candidate in _candidate_column_names(row["dataset"], row["sample"]):
             key = _normalise_name(candidate)
             if key in normalised and key not in ambiguous:
                 found = normalised[key]
@@ -104,9 +93,7 @@ def _print_mapping_diagnostics(matrix, metadata):
         timed_matched = timed[timed["matrix_column"].notna()]
         rows.append({
             "dataset": ds,
-            # Count actual matrix columns resolved to this dataset. Do not use
-            # g.sample here: DataFrame.sample is a method, not the sample column.
-            "matrix_columns": int(matched["matrix_column"].nunique()),
+            "matrix_columns": int(timed_matched["matrix_column"].nunique()),
             "metadata_samples": len(g),
             "matched_samples": len(matched),
             "timed_samples": len(timed),
@@ -130,11 +117,7 @@ def _trajectories(matrix, metadata, time_override=None):
         times = g["time_hours"].astype(float).to_numpy()
         if time_override:
             times = np.asarray([time_override.get((ds, c), t) for c, t in zip(g["matrix_column"], times)], dtype=float)
-        frame = pd.DataFrame(
-            matrix[g["matrix_column"]].T.to_numpy(),
-            index=times,
-            columns=matrix.index,
-        ).groupby(level=0).mean().sort_index()
+        frame = pd.DataFrame(matrix[g["matrix_column"]].T.to_numpy(), index=times, columns=matrix.index).groupby(level=0).mean().sort_index()
         if len(frame) >= 2:
             out[ds] = (frame.index.to_numpy(float), frame.to_numpy(float))
     return out
@@ -153,23 +136,14 @@ def _load_common_space():
 
     from Dynamics import time_hours, condition, replicate
 
-    metadata["time_hours"] = [
-        time_hours(d, s) for d, s in zip(metadata["dataset"], metadata["sample"])
-    ]
-    metadata["condition"] = [
-        condition(d, s) for d, s in zip(metadata["dataset"], metadata["sample"])
-    ]
-    metadata["replicate"] = [
-        replicate(s) for s in metadata["sample"]
-    ]
+    metadata["time_hours"] = [time_hours(d, s) for d, s in zip(metadata["dataset"], metadata["sample"])]
+    metadata["condition"] = [condition(d, s) for d, s in zip(metadata["dataset"], metadata["sample"])]
+    metadata["replicate"] = [replicate(s) for s in metadata["sample"]]
     metadata = _build_matrix_column_map(matrix, metadata)
     _print_mapping_diagnostics(matrix, metadata)
 
     if metadata["matrix_column"].notna().sum() == 0:
-        raise RuntimeError(
-            "Stage 2.7 could not match any metadata sample to the Stage 2.6 "
-            "matrix columns. See results/Dynamics/stage2_7/00_mapping_diagnostics.csv."
-        )
+        raise RuntimeError("Stage 2.7 could not match any metadata sample to the Stage 2.6 matrix columns. See results/Dynamics/stage2_7/00_mapping_diagnostics.csv.")
     return matrix, metadata[metadata["matrix_column"].notna()].copy()
 
 
@@ -188,21 +162,11 @@ def leave_one_dataset_out(matrix, metadata):
                     preds.append(p)
             if not preds:
                 continue
-            cols = metadata[
-                (metadata["dataset"] == test_ds)
-                & (metadata["time_hours"] == target)
-                & metadata["matrix_column"].notna()
-            ]["matrix_column"].tolist()
+            cols = metadata[(metadata["dataset"] == test_ds) & (metadata["time_hours"] == target) & metadata["matrix_column"].notna()]["matrix_column"].tolist()
             if not cols:
                 continue
             truth = matrix[cols].mean(axis=1).to_numpy(float)
-            rows.append({
-                "validation": "leave_one_dataset_out",
-                "test_dataset": test_ds,
-                "time_hours": float(target),
-                "n_training_datasets": len(preds),
-                **_metrics(truth, np.mean(preds, axis=0)),
-            })
+            rows.append({"validation": "leave_one_dataset_out", "test_dataset": test_ds, "time_hours": float(target), "n_training_datasets": len(preds), **_metrics(truth, np.mean(preds, axis=0))})
     return pd.DataFrame(rows)
 
 
@@ -218,23 +182,13 @@ def leave_one_replicate_out(matrix, metadata):
             test = g[(g["replicate"] == held) & g["matrix_column"].notna()].copy()
             train = train[train["time_hours"].notna()]
             for target in sorted(test["time_hours"].dropna().unique()):
-                frame = pd.DataFrame(
-                    matrix[train["matrix_column"]].T.to_numpy(),
-                    index=train["time_hours"].to_numpy(),
-                    columns=matrix.index,
-                ).groupby(level=0).mean().sort_index()
+                frame = pd.DataFrame(matrix[train["matrix_column"]].T.to_numpy(), index=train["time_hours"].to_numpy(), columns=matrix.index).groupby(level=0).mean().sort_index()
                 pred = _interpolate(frame.to_numpy(), frame.index.to_numpy(float), float(target))
                 if pred is None:
                     continue
                 cols = test[test["time_hours"] == target]["matrix_column"].tolist()
                 truth = matrix[cols].mean(axis=1).to_numpy(float)
-                rows.append({
-                    "validation": "leave_one_replicate_out",
-                    "dataset": ds,
-                    "held_out_replicate": str(held),
-                    "time_hours": float(target),
-                    **_metrics(truth, pred),
-                })
+                rows.append({"validation": "leave_one_replicate_out", "dataset": ds, "held_out_replicate": str(held), "time_hours": float(target), **_metrics(truth, pred)})
     return pd.DataFrame(rows)
 
 
@@ -265,13 +219,7 @@ def permutation_null(matrix, metadata, n_permutations=25, seed=42):
                     continue
                 cols = test[test["time_hours"] == target]["matrix_column"].tolist()
                 truth = matrix[cols].mean(axis=1).to_numpy(float)
-                rows.append({
-                    "validation": "time_permutation_null",
-                    "permutation": permutation,
-                    "test_dataset": test_ds,
-                    "time_hours": float(target),
-                    **_metrics(truth, np.mean(preds, axis=0)),
-                })
+                rows.append({"validation": "time_permutation_null", "permutation": permutation, "test_dataset": test_ds, "time_hours": float(target), **_metrics(truth, np.mean(preds, axis=0))})
     return pd.DataFrame(rows)
 
 
@@ -285,33 +233,14 @@ def stage2_7(n_permutations=25, seed=42):
     replicate_df.to_csv(OUT / "02_leave_one_replicate_out.csv", index=False)
     null_df.to_csv(OUT / "03_time_permutation_null.csv", index=False)
 
-    frames = [
-        ("leave_one_dataset_out", dataset_df),
-        ("leave_one_replicate_out", replicate_df),
-        ("time_permutation_null", null_df),
-    ]
+    frames = [("leave_one_dataset_out", dataset_df), ("leave_one_replicate_out", replicate_df), ("time_permutation_null", null_df)]
     summary = []
     for name, frame in frames:
-        summary.append({
-            "validation": name,
-            "n_cases": len(frame),
-            "mean_rmse": frame.rmse.mean() if not frame.empty else np.nan,
-            "median_rmse": frame.rmse.median() if not frame.empty else np.nan,
-            "mean_mae": frame.mae.mean() if not frame.empty else np.nan,
-            "mean_correlation": frame.correlation.mean() if not frame.empty else np.nan,
-        })
+        summary.append({"validation": name, "n_cases": len(frame), "mean_rmse": frame.rmse.mean() if not frame.empty else np.nan, "median_rmse": frame.rmse.median() if not frame.empty else np.nan, "mean_mae": frame.mae.mean() if not frame.empty else np.nan, "mean_correlation": frame.correlation.mean() if not frame.empty else np.nan})
     summary_df = pd.DataFrame(summary)
     summary_df.to_csv(OUT / "04_validation_summary.csv", index=False)
 
-    pd.DataFrame([{
-        "common_genes": int(matrix.shape[0]),
-        "samples": int(matrix.shape[1]),
-        "datasets": sorted(metadata["dataset"].unique().tolist()),
-        "dataset_holdout_cases": len(dataset_df),
-        "replicate_holdout_cases": len(replicate_df),
-        "permutation_cases": len(null_df),
-        "permutations": n_permutations,
-    }]).to_json(OUT / "05_stage27_report.json", orient="records", indent=2)
+    pd.DataFrame([{"common_genes": int(matrix.shape[0]), "samples": int(matrix.shape[1]), "datasets": sorted(metadata.dataset.unique().tolist()), "dataset_holdout_cases": len(dataset_df), "replicate_holdout_cases": len(replicate_df), "permutation_cases": len(null_df), "permutations": n_permutations}]).to_json(OUT / "05_stage27_report.json", orient="records", indent=2)
     return summary_df
 
 
