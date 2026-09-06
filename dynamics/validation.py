@@ -20,9 +20,7 @@ def _interpolate(points,times,target):
     if len(times)<2 or target<times.min() or target>times.max(): return None
     return np.asarray([np.interp(target,times,points[:,j]) for j in range(points.shape[1])])
 
-def _normalise_name(value):
-    return re.sub(r"\s+","",str(value).strip().strip('"').replace("\\","/")).lower()
-
+def _normalise_name(value): return re.sub(r"\s+","",str(value).strip().strip('"').replace("\\","/")).lower()
 def _strip_dataset_prefix(sample):
     s=str(sample).strip().strip('"')
     while re.match(r"^GSE\d+__",s,re.I): s=re.sub(r"^GSE\d+__","",s,count=1,flags=re.I)
@@ -46,11 +44,7 @@ def _build_matrix_column_map(matrix,metadata):
             if key in normalised and key not in ambiguous: found=normalised[key]; break
         resolved.append(found)
     metadata["matrix_column"]=resolved
-    matched=metadata["matrix_column"].notna().sum()
-    # Legacy Stage 2.6 fallback: an older row-wise z-score operation could
-    # serialize sample columns as 0,1,2,... while metadata retained the same
-    # sample order. If every metadata row corresponds to one matrix column,
-    # positional matching is deterministic and does not infer biology.
+    matched=int(metadata["matrix_column"].notna().sum())
     if matched==0 and len(actual)==len(metadata):
         numeric_like=all(re.fullmatch(r"\d+(?:\.0+)?",str(c).strip()) for c in actual)
         if numeric_like:
@@ -60,13 +54,7 @@ def _build_matrix_column_map(matrix,metadata):
 
 def _time_from_text(dataset,sample):
     s=_strip_dataset_prefix(sample).lower().replace("_"," ").replace("-"," ")
-    patterns={
-        "GSE148158":[(r"48\s*h|48h|day\s*2",48.),(r"72\s*h|72h|day\s*3",72.)],
-        "GSE52052":[(r"day\s*11|11\s*d|11d",264.)],
-        "GSE67462":[(r"day\s*0\b|d\s*0\b|0\s*h",0.),(r"day\s*1\b|d\s*1\b|24\s*h|24h",24.),(r"day\s*3\b|d\s*3\b|72\s*h|72h",72.),(r"day\s*5\b|d\s*5\b|120\s*h|120h",120.),(r"day\s*7\b|d\s*7\b|168\s*h|168h",168.),(r"day\s*11\b|d\s*11\b|264\s*h|264h",264.),(r"day\s*15\b|d\s*15\b|360\s*h|360h",360.),(r"day\s*18\b|d\s*18\b|432\s*h|432h",432.)],
-        "GSE297234":[(r"d\s*0\b|day\s*0\b",0.),(r"d\s*3\b|day\s*3\b",72.),(r"d\s*7\b|day\s*7\b",168.),(r"d\s*10\b|day\s*10\b",240.)],
-        "GSE28688":[(r"24\s*h|24h",24.),(r"48\s*h|48h",48.),(r"72\s*h|72h",72.)],
-    }
+    patterns={"GSE148158":[(r"48\s*h|48h|day\s*2",48.),(r"72\s*h|72h|day\s*3",72.)],"GSE52052":[(r"day\s*11|11\s*d|11d",264.)],"GSE67462":[(r"day\s*0\b|d\s*0\b|0\s*h",0.),(r"day\s*1\b|d\s*1\b|24\s*h|24h",24.),(r"day\s*3\b|d\s*3\b|72\s*h|72h",72.),(r"day\s*5\b|d\s*5\b|120\s*h|120h",120.),(r"day\s*7\b|d\s*7\b|168\s*h|168h",168.),(r"day\s*11\b|d\s*11\b|264\s*h|264h",264.),(r"day\s*15\b|d\s*15\b|360\s*h|360h",360.),(r"day\s*18\b|d\s*18\b|432\s*h|432h",432.)],"GSE297234":[(r"d\s*0\b|day\s*0\b",0.),(r"d\s*3\b|day\s*3\b",72.),(r"d\s*7\b|day\s*7\b",168.),(r"d\s*10\b|day\s*10\b",240.)],"GSE28688":[(r"24\s*h|24h",24.),(r"48\s*h|48h",48.),(r"72\s*h|72h",72.)]}
     for p,v in patterns.get(dataset,[]):
         if re.search(p,s): return v
     return np.nan
@@ -82,10 +70,8 @@ def _time_hours_for_validation(dataset,sample,row_index=None,gsm_time=None):
     return _time_from_text(dataset,raw)
 
 def _recover_ordered_sample_labels(metadata):
-    try:
-        from Dynamics import PCA_FILES,GSE28688_ROW_SAMPLE
-    except Exception:
-        return metadata
+    try: from Dynamics import PCA_FILES,GSE28688_ROW_SAMPLE
+    except Exception: return metadata
     metadata=metadata.copy(); recovered=0
     for ds,idxs in metadata.groupby("dataset",sort=False).groups.items():
         if ds not in PCA_FILES or not PCA_FILES[ds].exists(): continue
@@ -104,8 +90,9 @@ def _print_mapping_diagnostics(matrix,metadata):
     rows=[]
     for ds,g in metadata.groupby("dataset",sort=True):
         timed=g[g.time_hours.notna()]; matched=g[g.matrix_column.notna()]; tm=timed[timed.matrix_column.notna()]
-        unresolved=g[g.time_hours.isna()]["sample"].astype(str).tolist()[:5]
-        rows.append({"dataset":ds,"matrix_columns":int(g.matrix_column.nunique()),"metadata_samples":len(g),"matched_samples":len(matched),"timed_samples":len(timed),"timed_matched":len(tm),"unique_times":int(tm.time_hours.nunique()),"time_values":",".join(map(str,sorted(tm.time_hours.unique()))),"unresolved_time_examples":";".join(unresolved),"replicates":",".join(sorted(map(str,tm.replicate.dropna().unique())))})
+        unresolved=g[g.time_hours.isna()]["sample"].astype(str).tolist()[:8]
+        examples=matched[["sample","matrix_column","time_hours"]].head(5).astype(str).to_dict("records")
+        rows.append({"dataset":ds,"matrix_columns":int(g.matrix_column.nunique()),"metadata_samples":len(g),"matched_samples":len(matched),"timed_samples":len(timed),"timed_matched":len(tm),"unique_times":int(tm.time_hours.nunique()),"time_values":",".join(map(str,sorted(tm.time_hours.unique()))),"unresolved_time_examples":";".join(unresolved),"replicates":",".join(sorted(map(str,tm.replicate.dropna().unique()))),"mapping_examples":str(examples)})
     diag=pd.DataFrame(rows); diag.to_csv(OUT/"00_mapping_diagnostics.csv",index=False); print("\nStage 2.7 sample-to-matrix mapping:"); print(diag.to_string(index=False)); return diag
 
 def _load_common_space():
@@ -121,7 +108,10 @@ def _load_common_space():
         times.append(_time_hours_for_validation(ds,raw,idx if ds=="GSE28688" else None,GSM_TIME)); conditions.append(condition(ds,raw)); replicates.append(replicate(raw))
     metadata["time_hours"]=times; metadata["condition"]=conditions; metadata["replicate"]=replicates
     metadata=_build_matrix_column_map(matrix,metadata); _print_mapping_diagnostics(matrix,metadata)
-    if metadata.matrix_column.notna().sum()==0: raise RuntimeError("Stage 2.7 could not match metadata to Stage 2.6 matrix columns.")
+    if metadata.matrix_column.notna().sum()==0:
+        print(f"Stage 2.7 DEBUG: matrix shape={matrix.shape}; first matrix columns={list(matrix.columns[:12])}")
+        print(f"Stage 2.7 DEBUG: first metadata rows={metadata[['dataset','sample','matrix_column','time_hours']].head(12).to_string(index=False)}")
+        raise RuntimeError("Stage 2.7 could not match metadata to Stage 2.6 matrix columns.")
     return matrix,metadata[metadata.matrix_column.notna()].copy()
 
 def _trajectories(matrix,metadata,time_override=None):
