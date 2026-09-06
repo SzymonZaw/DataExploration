@@ -13,7 +13,6 @@ import os
 import ssl
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 
 import pandas as pd
@@ -53,10 +52,18 @@ def _request_json(url, payload, timeout=90, retries=2):
             req = urllib.request.Request(url, data=body, headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "User-Agent": "DataExploration-stage2.9.8/1.2",
+                "User-Agent": "DataExploration-stage2.9.8/1.3",
             }, method="POST")
             with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context(True)) as r:
                 return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")
+                _log(f"HTTP {exc.code} from enrichment API: {detail[:1000]}")
+            except Exception:
+                pass
+            break
         except urllib.error.URLError as exc:
             last_exc = exc
             if insecure and attempt == 0 and isinstance(exc.reason, ssl.SSLCertVerificationError):
@@ -65,10 +72,18 @@ def _request_json(url, payload, timeout=90, retries=2):
                     req = urllib.request.Request(url, data=body, headers={
                         "Content-Type": "application/json",
                         "Accept": "application/json",
-                        "User-Agent": "DataExploration-stage2.9.8/1.2",
+                        "User-Agent": "DataExploration-stage2.9.8/1.3",
                     }, method="POST")
                     with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context(False)) as r:
                         return json.loads(r.read().decode("utf-8"))
+                except urllib.error.HTTPError as exc2:
+                    last_exc = exc2
+                    try:
+                        detail = exc2.read().decode("utf-8", errors="replace")
+                        _log(f"HTTP {exc2.code} from enrichment API: {detail[:1000]}")
+                    except Exception:
+                        pass
+                    break
                 except Exception as exc2:
                     last_exc = exc2
             if attempt < retries:
@@ -79,20 +94,6 @@ def _request_json(url, payload, timeout=90, retries=2):
                 time.sleep(2 ** attempt)
     _log(f"request failed after {retries + 1} attempts: {last_exc}")
     return None
-
-
-def _request_text(url, data=None, timeout=90, method="GET"):
-    insecure = os.environ.get("STAGE298_INSECURE_SSL", "") == "1"
-    try:
-        req = urllib.request.Request(url, data=data, headers={"User-Agent": "DataExploration-stage2.9.8/1.2"}, method=method)
-        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context(True)) as r:
-            return r.read().decode("utf-8")
-    except urllib.error.URLError as exc:
-        if insecure and isinstance(exc.reason, ssl.SSLCertVerificationError):
-            req = urllib.request.Request(url, data=data, headers={"User-Agent": "DataExploration-stage2.9.8/1.2"}, method=method)
-            with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context(False)) as r:
-                return r.read().decode("utf-8")
-        raise
 
 
 def _load_genes():
@@ -130,7 +131,30 @@ def _gprofiler(gene_list, background, label):
         "output": "json",
     }
     _log(f"g:Profiler enrichment for {label} ({len(gene_list):,} genes)...")
-    return _request_json("https://biit.cs.ut.ee/gprofiler/api/gost/profile/", payload)
+    data = _request_json("https://biit.cs.ut.ee/gprofiler/api/gost/profile/", payload)
+    if data is not None:
+        try:
+            cache.write_text(json.dumps(data), encoding="utf-8")
+        except Exception:
+            pass
+    return data
+
+
+def _flatten_intersections(value):
+    """Return a clean comma-separated gene list from g:Profiler intersections."""
+    out = []
+
+    def visit(x):
+        if isinstance(x, (list, tuple, set)):
+            for item in x:
+                visit(item)
+        elif x is not None:
+            s = str(x).strip()
+            if s:
+                out.append(s)
+
+    visit(value)
+    return ",".join(dict.fromkeys(out))
 
 
 def _flatten_gprofiler(data, label):
@@ -150,7 +174,7 @@ def _flatten_gprofiler(data, label):
             "p_value": r.get("p_value"),
             "precision": r.get("precision"),
             "recall": r.get("recall"),
-            "intersection_genes": ",".join(map(str, r.get("intersections", []))),
+            "intersection_genes": _flatten_intersections(r.get("intersections", [])),
         })
     return pd.DataFrame(rows)
 
