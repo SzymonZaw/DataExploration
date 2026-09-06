@@ -129,8 +129,9 @@ def run():
         mean,sd,pca,_=fit_template(train,genes)
         test_t,test_X,allg=traj[held]
         zte=project(test_t,test_X,genes,allg,mean,sd,pca)
-        time_norm=(test_t-test_t.min())/(test_t.max()-test_t.min())
-        zte_grid=np.interp(GRID,time_norm,zte)
+        # project() already returns the held-out trajectory on the common GRID.
+        # The original held-out time vector can have a different number of points.
+        zte_grid=zte
         time_corr=corr(GRID,zte_grid)
         rng=np.random.default_rng(29000+fi);cos=[]
         base_sign=np.sign(time_corr) if np.isfinite(time_corr) and time_corr!=0 else 1.0
@@ -139,7 +140,7 @@ def run():
             bg=[genes[i] for i in sel]
             bmean,bsd,bpca,_=fit_template(train,bg)
             bz=project(test_t,test_X,bg,allg,bmean,bsd,bpca)
-            bz_grid=np.interp(GRID,time_norm,bz)
+            bz_grid=bz
             c=corr(zte_grid*base_sign,bz_grid)
             if np.isfinite(c):cos.append(abs(c))
         boot.append({"held_out_dataset":held,"n_selected_genes":len(genes),"axis_bootstrap_correlation_mean":np.mean(cos) if cos else np.nan,"axis_bootstrap_correlation_p05":np.quantile(cos,.05) if cos else np.nan,"axis_bootstrap_correlation_p95":np.quantile(cos,.95) if cos else np.nan})
