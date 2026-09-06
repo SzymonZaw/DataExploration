@@ -23,11 +23,7 @@ def _metrics(y_true, y_pred):
         return {"rmse": np.nan, "mae": np.nan, "correlation": np.nan}
     a, b = a[ok], b[ok]
     corr = np.corrcoef(a, b)[0, 1] if len(a) > 1 and np.std(a) > 0 and np.std(b) > 0 else np.nan
-    return {
-        "rmse": float(np.sqrt(np.mean((a - b) ** 2))),
-        "mae": float(np.mean(np.abs(a - b))),
-        "correlation": float(corr),
-    }
+    return {"rmse": float(np.sqrt(np.mean((a - b) ** 2))), "mae": float(np.mean(np.abs(a - b))), "correlation": float(corr)}
 
 
 def _interpolate(points, times, target):
@@ -39,46 +35,34 @@ def _interpolate(points, times, target):
 
 
 def _normalise_name(value):
-    """Normalise sample/column labels only for matching, never for reporting."""
-    s = str(value).strip().strip('"').strip()
-    s = s.replace("\\", "/")
-    s = re.sub(r"\s+", "", s)
-    return s.lower()
+    s = str(value).strip().strip('"').strip().replace("\\", "/")
+    return re.sub(r"\s+", "", s).lower()
 
 
 def _candidate_column_names(dataset, sample):
-    """Generate conservative aliases used by Stage 2.6/sample files."""
-    ds = str(dataset).strip().strip('"')
-    sm = str(sample).strip().strip('"')
+    ds, sm = str(dataset).strip().strip('"'), str(sample).strip().strip('"')
     return [sm, f"{ds}__{sm}", f"{ds}_{sm}", f"{ds}/{sm}"]
 
 
 def _build_matrix_column_map(matrix, metadata):
-    """Resolve metadata rows to actual Stage 2.6 matrix columns."""
     actual = list(matrix.columns)
-    normalised = {}
-    ambiguous = set()
+    normalised, ambiguous = {}, set()
     for col in actual:
         key = _normalise_name(col)
         if key in normalised and normalised[key] != col:
             ambiguous.add(key)
         else:
             normalised[key] = col
-
-    resolved = []
-    statuses = []
+    resolved, statuses = [], []
     for _, row in metadata.iterrows():
-        found = None
-        method = "unmatched"
+        found, method = None, "unmatched"
         for candidate in _candidate_column_names(row["dataset"], row["sample"]):
             key = _normalise_name(candidate)
             if key in normalised and key not in ambiguous:
-                found = normalised[key]
-                method = "exact_or_alias"
+                found, method = normalised[key], "exact_or_alias"
                 break
         resolved.append(found)
         statuses.append(method)
-
     metadata = metadata.copy()
     metadata["matrix_column"] = resolved
     metadata["matrix_match_status"] = statuses
@@ -108,19 +92,29 @@ def _print_mapping_diagnostics(matrix, metadata):
     return diag
 
 
-def _trajectories(matrix, metadata, time_override=None):
-    out = {}
-    for ds, g in metadata.groupby("dataset"):
-        g = g[g["matrix_column"].notna() & g["time_hours"].notna()].copy()
-        if len(g) < 2:
-            continue
-        times = g["time_hours"].astype(float).to_numpy()
-        if time_override:
-            times = np.asarray([time_override.get((ds, c), t) for c, t in zip(g["matrix_column"], times)], dtype=float)
-        frame = pd.DataFrame(matrix[g["matrix_column"]].T.to_numpy(), index=times, columns=matrix.index).groupby(level=0).mean().sort_index()
-        if len(frame) >= 2:
-            out[ds] = (frame.index.to_numpy(float), frame.to_numpy(float))
-    return out
+def _strip_dataset_prefix(sample):
+    """Recover the original sample ID from Stage 2.6's dataset__sample label."""
+    s = str(sample).strip().strip('"')
+    return s.split("__", 1)[1] if "__" in s else s
+
+
+def _time_hours_for_validation(dataset, sample, gse28688_row_index=None):
+    """Apply Dynamics.py time parsing to the original sample ID.
+
+    Stage 2.6 writes columns as ``dataset__sample``. The original Dynamics
+    time parser expects the underlying GSM/text label, so validation must strip
+    that technical prefix before parsing. GSE28688 additionally has four
+    untimed GEO rows whose time points are defined by the documented row order.
+    """
+    from Dynamics import time_hours
+    raw = _strip_dataset_prefix(sample)
+    if dataset == "GSE28688" and gse28688_row_index is not None:
+        from Dynamics import GSE28688_ROW_TIME
+        if gse28688_row_index < len(GSE28688_ROW_TIME):
+            row_time = GSE28688_ROW_TIME[gse28688_row_index]
+            if pd.notna(row_time):
+                return float(row_time)
+    return time_hours(dataset, raw)
 
 
 def _load_common_space():
@@ -134,17 +128,45 @@ def _load_common_space():
     metadata["dataset"] = metadata["dataset"].astype(str)
     metadata["sample"] = metadata["sample"].astype(str)
 
-    from Dynamics import time_hours, condition, replicate
+    from Dynamics import condition, replicate
 
-    metadata["time_hours"] = [time_hours(d, s) for d, s in zip(metadata["dataset"], metadata["sample"])]
-    metadata["condition"] = [condition(d, s) for d, s in zip(metadata["dataset"], metadata["sample"])]
-    metadata["replicate"] = [replicate(s) for s in metadata["sample"]]
+    times = []
+    conditions = []
+    replicates = []
+    for ds, sample in zip(metadata["dataset"], metadata["sample"]):
+        raw = _strip_dataset_prefix(sample)
+        idx = None
+        if ds == "GSE28688":
+            m = re.fullmatch(r"GSM(\d+)", raw)
+            if m:
+                idx = int(m.group(1)) - 710513
+        times.append(_time_hours_for_validation(ds, sample, idx))
+        conditions.append(condition(ds, raw))
+        replicates.append(replicate(raw))
+    metadata["time_hours"] = times
+    metadata["condition"] = conditions
+    metadata["replicate"] = replicates
     metadata = _build_matrix_column_map(matrix, metadata)
     _print_mapping_diagnostics(matrix, metadata)
 
     if metadata["matrix_column"].notna().sum() == 0:
         raise RuntimeError("Stage 2.7 could not match any metadata sample to the Stage 2.6 matrix columns. See results/Dynamics/stage2_7/00_mapping_diagnostics.csv.")
     return matrix, metadata[metadata["matrix_column"].notna()].copy()
+
+
+def _trajectories(matrix, metadata, time_override=None):
+    out = {}
+    for ds, g in metadata.groupby("dataset"):
+        g = g[g["matrix_column"].notna() & g["time_hours"].notna()].copy()
+        if len(g) < 2:
+            continue
+        times = g["time_hours"].astype(float).to_numpy()
+        if time_override:
+            times = np.asarray([time_override.get((ds, c), t) for c, t in zip(g["matrix_column"], times)], dtype=float)
+        frame = pd.DataFrame(matrix[g["matrix_column"]].T.to_numpy(), index=times, columns=matrix.index).groupby(level=0).mean().sort_index()
+        if len(frame) >= 2:
+            out[ds] = (frame.index.to_numpy(float), frame.to_numpy(float))
+    return out
 
 
 def leave_one_dataset_out(matrix, metadata):
@@ -228,18 +250,15 @@ def stage2_7(n_permutations=25, seed=42):
     dataset_df = leave_one_dataset_out(matrix, metadata)
     replicate_df = leave_one_replicate_out(matrix, metadata)
     null_df = permutation_null(matrix, metadata, n_permutations=n_permutations, seed=seed)
-
     dataset_df.to_csv(OUT / "01_leave_one_dataset_out.csv", index=False)
     replicate_df.to_csv(OUT / "02_leave_one_replicate_out.csv", index=False)
     null_df.to_csv(OUT / "03_time_permutation_null.csv", index=False)
-
     frames = [("leave_one_dataset_out", dataset_df), ("leave_one_replicate_out", replicate_df), ("time_permutation_null", null_df)]
     summary = []
     for name, frame in frames:
         summary.append({"validation": name, "n_cases": len(frame), "mean_rmse": frame.rmse.mean() if not frame.empty else np.nan, "median_rmse": frame.rmse.median() if not frame.empty else np.nan, "mean_mae": frame.mae.mean() if not frame.empty else np.nan, "mean_correlation": frame.correlation.mean() if not frame.empty else np.nan})
     summary_df = pd.DataFrame(summary)
     summary_df.to_csv(OUT / "04_validation_summary.csv", index=False)
-
     pd.DataFrame([{"common_genes": int(matrix.shape[0]), "samples": int(matrix.shape[1]), "datasets": sorted(metadata.dataset.unique().tolist()), "dataset_holdout_cases": len(dataset_df), "replicate_holdout_cases": len(replicate_df), "permutation_cases": len(null_df), "permutations": n_permutations}]).to_json(OUT / "05_stage27_report.json", orient="records", indent=2)
     return summary_df
 
