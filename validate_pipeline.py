@@ -4,7 +4,7 @@ Default mode is fast and reuses the existing Stage 2.6 common gene space.
 Use --refresh to rebuild Stage 2.6, --stage28 for Stage 2.8, --stage29
 for Stage 2.9, --stage291 for robust invariant temporal programs, --stage292
 for latent dataset-invariant reprogramming progress, and --stage293 for
-latent-progress stability and permutation validation.
+fast latent-progress bootstrap stability and conditional permutation validation.
 """
 from pathlib import Path
 import argparse
@@ -71,7 +71,7 @@ def _parse_args():
     parser.add_argument("--stage29", action="store_true", help="Run only Stage 2.9 leakage-free invariant module-state validation.")
     parser.add_argument("--stage291", action="store_true", help="Run only Stage 2.9.1 robust invariant temporal-program validation with permutation null.")
     parser.add_argument("--stage292", action="store_true", help="Run only Stage 2.9.2 latent dataset-invariant reprogramming progress validation with permutation null.")
-    parser.add_argument("--stage293", action="store_true", help="Run only Stage 2.9.3 latent-progress bootstrap stability and 1000-permutation conditional null validation.")
+    parser.add_argument("--stage293", action="store_true", help="Run only the fast Stage 2.9.3 latent-progress bootstrap stability and 1000-permutation conditional null validation.")
     return parser.parse_args()
 
 
@@ -127,9 +127,9 @@ def main():
 
     if args.stage293:
         print("Using existing Stage 2.6 common space. Skipping Stage 2.6 through Stage 2.9.2.")
-        print("\nRunning Stage 2.9.3 latent-progress stability and permutation validation...")
-        from dynamics.stage293 import stage2_9_3
-        result = stage2_9_3()
+        print("\nRunning FAST Stage 2.9.3 latent-progress stability and permutation validation...")
+        from dynamics.stage293_progress import run
+        result = run()
         print(f"Stage 2.9.3 result: {result}")
         return
 
