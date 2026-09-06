@@ -115,18 +115,17 @@ def _gprofiler(gene_list, background, label):
         "output": "json",
     }
     _log(f"g:Profiler enrichment for {label} ({len(gene_list):,} genes)...")
-    return _request_json("https://biit.cs.ut.ee/gprofiler/api/gost/profile/", payload)
+    data = _request_json("https://biit.cs.ut.ee/gprofiler/api/gost/profile/", payload)
+    if data is not None:
+        try:
+            cache.write_text(json.dumps(data), encoding="utf-8")
+        except Exception:
+            pass
+    return data
 
 
 def _flatten_intersections(intersections, query_names):
-    """Return query genes corresponding to non-empty g:Profiler intersections.
-
-    g:Profiler documents ``intersections`` as a list of lists aligned with the
-    query Ensembl IDs. We deliberately use the exact submitted query order here
-    instead of the optional metadata mapping: the submitted IDs are already
-    canonical ENSG identifiers, while evidence-code metadata can have a
-    different nested representation when ``no_evidences=False``.
-    """
+    """Return query genes corresponding to non-empty g:Profiler intersections."""
     if not isinstance(intersections, list):
         return ""
     hits = []
@@ -209,12 +208,22 @@ def run():
         "n_enriched_tf_fdr05": 0,
     } for label, genes in sets.items()])
     meta.to_csv(OUT / "08_enrichment_summary.csv", index=False)
+
     _log("complete.")
     print("\nStage 2.9.8 enrichment summary", flush=True)
     print(meta.to_string(index=False), flush=True)
+
+    # Keep the console concise. Full intersection gene lists remain available
+    # in 02/03/04/07 CSV files and are never printed as giant single cells.
     if len(summary):
-        print("\nTop biological terms:", flush=True)
-        print(summary.head(30).to_string(index=False), flush=True)
+        display = summary[[
+            "gene_set", "category", "term_id", "term_name",
+            "p_value", "intersection_size"
+        ]].copy()
+        display["p_value"] = pd.to_numeric(display["p_value"], errors="coerce")
+        display = display.sort_values(["gene_set", "p_value"], na_position="last").head(20)
+        print("\nTop biological terms (gene lists saved to CSV):", flush=True)
+        print(display.to_string(index=False), flush=True)
     else:
         print("No enrichment results were returned; inspect network/cache diagnostics.", flush=True)
     return meta
