@@ -86,7 +86,8 @@ def dataset_predictability(coords):
     counts = pd.Series(y).value_counts()
     if len(np.unique(y)) >= 2 and counts.min() >= 2:
         cv = StratifiedKFold(n_splits=int(min(3, counts.min())), shuffle=True, random_state=2919)
-        clf = LogisticRegression(max_iter=2000, multi_class="auto")
+        # scikit-learn 1.8+ removed the multi_class constructor argument.
+        clf = LogisticRegression(max_iter=2000)
         scores = cross_val_score(clf, X[:, :min(10, X.shape[1])], y, cv=cv)
         result.update(accuracy=float(scores.mean()), status="ok")
     out = pd.DataFrame([result])
