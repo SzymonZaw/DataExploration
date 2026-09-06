@@ -16,12 +16,14 @@ OUT=ROOT/"results"/"Dynamics"/"stage2_9_25"; OUT.mkdir(parents=True,exist_ok=Tru
 TARGET=["GSE67462","GSE28688","GSE297234"]
 VARIANTS=("baseline_all","time_dominant")
 N_PERM=1000
+MIN_TRAIN_TRIPLES=4
+MIN_TEST_TRIPLES=2
 
 def log(x): print(f"Stage 2.9.25: {x}",flush=True)
 
 def corr(a,b):
     a=np.asarray(a,float); b=np.asarray(b,float); ok=np.isfinite(a)&np.isfinite(b)
-    if ok.sum()<3 or np.std(a[ok])<1e-12 or np.std(b[ok])<1e-12:return np.nan
+    if ok.sum()<2 or np.std(a[ok])<1e-12 or np.std(b[ok])<1e-12:return np.nan
     return float(pd.Series(a[ok]).corr(pd.Series(b[ok])))
 
 def load():
@@ -60,14 +62,6 @@ def project(m,meta,train_ds,test_ds,genes):
         if len(q)>=3:out[str(ds)]=(q.time_hours.to_numpy(float),q.state.to_numpy(float))
     return out
 
-def transitions(t,z):
-    return [(float(t[i-1]),float(z[i-1]),float(t[i]),float(z[i])) for i in range(1,len(t)) if np.isfinite(t[i-1]) and np.isfinite(z[i-1]) and np.isfinite(t[i]) and np.isfinite(z[i]) and t[i]>t[i-1]]
-
-def markov_models(train_rows,test_rows):
-    # Current-only: z_{t+1}=a+b z_t. History model: + z_{t-1}.
-    X1=np.asarray([[r[1]] for r in train_rows],float); X2=np.asarray([[r[1],r[0]] for r in train_rows],float); y=np.asarray([r[3] for r in train_rows],float)
-    # rows encode previous time/state -> current time/current state; predict next requires triples below
-
 def triples(t,z):
     return [(float(t[i-2]),float(z[i-2]),float(t[i-1]),float(z[i-1]),float(t[i]),float(z[i])) for i in range(2,len(t)) if np.all(np.isfinite([t[i-2],z[i-2],t[i-1],z[i-1],t[i],z[i]])) and t[i-2]<t[i-1]<t[i]]
 
@@ -77,8 +71,7 @@ def eval_fold(m,meta,heldout,variant,genes):
     train_rows=[]; test_rows=triples(*trj[heldout])
     for d in train:
         if d in trj:train_rows.extend(triples(*trj[d]))
-    if len(train_rows)<4 or len(test_rows)<3:return None,[]
-    # Current state only and current+previous state. Previous-state model uses the same number of training observations.
+    if len(train_rows)<MIN_TRAIN_TRIPLES or len(test_rows)<MIN_TEST_TRIPLES:return None,[]
     Xcur=np.asarray([[r[3]] for r in train_rows]); Xhist=np.asarray([[r[3],r[1]] for r in train_rows]); y=np.asarray([r[5] for r in train_rows])
     cur=LinearRegression().fit(Xcur,y); hist=LinearRegression().fit(Xhist,y)
     Xtcur=np.asarray([[r[3]] for r in test_rows]); Xth=np.asarray([[r[3],r[1]] for r in test_rows]); yt=np.asarray([r[5] for r in test_rows])
@@ -96,7 +89,7 @@ def perm_fold(m,meta,heldout,variant,genes,seed):
     for d in train:
         if d in trj:rows.extend(triples(*trj[d]))
     test=triples(*trj[heldout])
-    if len(rows)<4 or len(test)<3:return None
+    if len(rows)<MIN_TRAIN_TRIPLES or len(test)<MIN_TEST_TRIPLES:return None
     model=LinearRegression().fit(np.asarray([[r[3],r[1]] for r in rows]),np.asarray([r[5] for r in rows])); pred=model.predict(np.asarray([[r[3],r[1]] for r in test])); y=np.asarray([r[5] for r in test]); obs=float(np.sqrt(np.mean((pred-y)**2)))
     rng=np.random.default_rng(seed); null=np.empty(N_PERM)
     for b in range(N_PERM):null[b]=np.sqrt(np.mean((pred-rng.permutation(y))**2))
