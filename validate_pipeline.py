@@ -51,7 +51,7 @@ def _write_dataset_roles():
 
 def _parse_args():
     p=argparse.ArgumentParser(description="Run DataExploration validation stages.")
-    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912"):p.add_argument(f"--{name}",action="store_true")
+    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913"):p.add_argument(f"--{name}",action="store_true")
     return p.parse_args()
 
 def _require_common_space():
@@ -106,6 +106,10 @@ def main():
         print("Using existing Stage 2.9.1 fold discoveries; running Stage 2.9.12 gene-selection sensitivity diagnostics...")
         from dynamics.stage2912 import run
         print(f"Stage 2.9.12 result: {run()}");return
+    if args.stage2913:
+        print("Using existing Stage 2.9.1 fold discoveries; running Stage 2.9.13 enrichment bootstrap stability diagnostics...")
+        from dynamics.stage2913 import run
+        print(f"Stage 2.9.13 result: {run()}");return
     _recover_legacy_metadata();_write_dataset_roles();summary=stage2_7();print(summary.to_string(index=False))
 
 if __name__=="__main__":main()
