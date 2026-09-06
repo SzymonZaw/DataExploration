@@ -1,9 +1,13 @@
-"""Run the independent validation milestones added after Stage 2.6."""
+"""Run independent validation milestones.
+
+Default mode is fast and reuses the existing Stage 2.6 common gene space.
+Use --refresh to rebuild Stage 2.6, and --stage28 to run only Stage 2.8.
+"""
 from pathlib import Path
+import argparse
 import re
 import pandas as pd
 
-from dynamics.stage26_v2 import stage2_6_robust
 from dynamics.validation import stage2_7
 from dynamics.stage28 import stage2_8
 from Dynamics import PCA_FILES, GSE28688_ROW_SAMPLE
@@ -52,14 +56,43 @@ def _write_dataset_roles():
     print("\nStage 2.7 dataset roles:"); print(out.to_string(index=False)); return out
 
 
-if __name__ == "__main__":
-    print("Running bounded Stage 2.6 refresh (MyGene/NCBI; no giant BioMart requests)...")
-    refresh=stage2_6_robust()
-    if refresh.get("status")!="sufficient_common_human_gene_space":
-        if COMMON_MATRIX.exists() and COMMON_METADATA.exists(): print("WARNING: new Stage 2.6 mapping is insufficient; continuing with the last valid common-space files.")
-        else: raise RuntimeError("Stage 2.6 did not produce a sufficient common gene space and no previous valid files exist.")
+def _parse_args():
+    parser=argparse.ArgumentParser(description="Run DataExploration validation stages.")
+    parser.add_argument("--refresh", action="store_true", help="Rebuild the Stage 2.6 common human-gene space before validation.")
+    parser.add_argument("--stage28", action="store_true", help="Run only Stage 2.8 diagnostics using the existing common space.")
+    return parser.parse_args()
+
+
+def _require_common_space():
+    if not COMMON_MATRIX.exists() or not COMMON_METADATA.exists():
+        raise RuntimeError("Stage 2.6 common-space files are missing. Run: python validate_pipeline.py --refresh")
+
+
+def main():
+    args = _parse_args()
+
+    if args.refresh:
+        from dynamics.stage26_v2 import stage2_6_robust
+        print("Running Stage 2.6 refresh (MyGene/NCBI; no giant BioMart requests)...")
+        refresh = stage2_6_robust()
+        if refresh.get("status") != "sufficient_common_human_gene_space":
+            if not (COMMON_MATRIX.exists() and COMMON_METADATA.exists()):
+                raise RuntimeError("Stage 2.6 did not produce a sufficient common gene space and no previous valid files exist.")
+            print("WARNING: new Stage 2.6 mapping is insufficient; keeping the last valid common-space files.")
+
+    _require_common_space()
+
+    if args.stage28:
+        print("Using existing Stage 2.6 common space. Skipping Stage 2.6 and Stage 2.7.")
+        print("\nRunning Stage 2.8 cross-dataset diagnostics...")
+        result = stage2_8()
+        print(f"Stage 2.8 result: {result}")
+        return
+
     _recover_legacy_metadata(); _write_dataset_roles()
-    print("Running Stage 2.7 independent validation...")
+    print("Running Stage 2.7 independent validation using existing Stage 2.6 common space...")
     summary=stage2_7(); print("\nStage 2.7 summary:"); print(summary.to_string(index=False))
-    print("\nRunning Stage 2.8 cross-dataset diagnostics...")
-    stage2_8()
+
+
+if __name__ == "__main__":
+    main()
