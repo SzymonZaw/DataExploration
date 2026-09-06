@@ -51,7 +51,7 @@ def _write_dataset_roles():
 
 def _parse_args():
     p=argparse.ArgumentParser(description="Run DataExploration validation stages.")
-    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914","stage2915","stage2916","stage2917","stage2918","stage2919","stage2920"):p.add_argument(f"--{name}",action="store_true")
+    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914","stage2915","stage2916","stage2917","stage2918","stage2919","stage2920","stage2921"):p.add_argument(f"--{name}",action="store_true")
     return p.parse_args()
 
 def _require_common_space():
@@ -124,6 +124,9 @@ def main():
     if args.stage2920:
         print("Running Stage 2.9.20 controlled common-state repair diagnostics; no ODE/state-space model...")
         from dynamics.stage2920 import run;print(f"Stage 2.9.20 result: {run()}");return
+    if args.stage2921:
+        print("Running Stage 2.9.21 leakage-free common-state repair validation; no ODE/state-space model...")
+        from dynamics.stage2921 import run;print(f"Stage 2.9.21 result: {run()}");return
     _recover_legacy_metadata();_write_dataset_roles();summary=stage2_7();print(summary.to_string(index=False))
 
 if __name__=="__main__":main()
