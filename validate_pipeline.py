@@ -1,8 +1,8 @@
 """Run independent validation milestones.
 
 Default mode is fast and reuses the existing Stage 2.6 common gene space.
-Use --refresh to rebuild Stage 2.6, --stage28 for Stage 2.8, and --stage29
-for leakage-free invariant module-state validation.
+Use --refresh to rebuild Stage 2.6, --stage28 for Stage 2.8, --stage29
+for Stage 2.9, and --stage291 for robust invariant temporal programs.
 """
 from pathlib import Path
 import argparse
@@ -67,6 +67,7 @@ def _parse_args():
     parser.add_argument("--refresh", action="store_true", help="Rebuild the Stage 2.6 common human-gene space before validation.")
     parser.add_argument("--stage28", action="store_true", help="Run only Stage 2.8 diagnostics using the existing common space.")
     parser.add_argument("--stage29", action="store_true", help="Run only Stage 2.9 leakage-free invariant module-state validation.")
+    parser.add_argument("--stage291", action="store_true", help="Run only Stage 2.9.1 robust invariant temporal-program validation with permutation null.")
     return parser.parse_args()
 
 
@@ -102,6 +103,14 @@ def main():
         from dynamics.stage29 import stage2_9
         result = stage2_9()
         print(f"Stage 2.9 result: {result}")
+        return
+
+    if args.stage291:
+        print("Using existing Stage 2.6 common space. Skipping Stage 2.6, Stage 2.7, Stage 2.8, and Stage 2.9.")
+        print("\nRunning Stage 2.9.1 robust invariant temporal-program validation...")
+        from dynamics.stage291 import stage2_9_1
+        result = stage2_9_1()
+        print(f"Stage 2.9.1 result: {result}")
         return
 
     _recover_legacy_metadata(); _write_dataset_roles()
