@@ -52,7 +52,7 @@ def _request_json(url, payload, timeout=90, retries=2):
             req = urllib.request.Request(url, data=body, headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "User-Agent": "DataExploration-stage2.9.8/1.3",
+                "User-Agent": "DataExploration-stage2.9.8/1.4",
             }, method="POST")
             with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context(True)) as r:
                 return json.loads(r.read().decode("utf-8"))
@@ -64,7 +64,7 @@ def _request_json(url, payload, timeout=90, retries=2):
                     req = urllib.request.Request(url, data=body, headers={
                         "Content-Type": "application/json",
                         "Accept": "application/json",
-                        "User-Agent": "DataExploration-stage2.9.8/1.3",
+                        "User-Agent": "DataExploration-stage2.9.8/1.4",
                     }, method="POST")
                     with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context(False)) as r:
                         return json.loads(r.read().decode("utf-8"))
@@ -118,54 +118,24 @@ def _gprofiler(gene_list, background, label):
     return _request_json("https://biit.cs.ut.ee/gprofiler/api/gost/profile/", payload)
 
 
-def _query_gene_names(data, fallback_genes):
-    """Return query gene names aligned with g:Profiler intersection rows.
-
-    The current API documents ``intersections`` as a list of lists aligned to
-    ``meta.genes_metadata.query.<query_name>.ensgs``.  Older code treated the
-    nested lists themselves as gene names, which produced outputs such as
-    ``REAC`` or evidence codes instead of the intersecting genes.
-    """
-    if not isinstance(data, dict):
-        return list(fallback_genes)
-    meta = data.get("meta", {}) or {}
-    qmeta = meta.get("genes_metadata", {}).get("query", {}) or {}
-    if not qmeta:
-        return list(fallback_genes)
-    qname = next(iter(qmeta), None)
-    entry = qmeta.get(qname, {}) or {}
-    ensgs = entry.get("ensgs") or []
-    mapping = entry.get("mapping") or {}
-    names = []
-    for value in ensgs:
-        key = str(value)
-        mapped = mapping.get(key) if isinstance(mapping, dict) else None
-        if isinstance(mapped, list):
-            names.append(str(mapped[0]) if mapped else key)
-        elif mapped:
-            names.append(str(mapped))
-        else:
-            names.append(key)
-    return names or list(fallback_genes)
-
-
 def _flatten_intersections(intersections, query_names):
-    """Convert API's nested intersection representation to gene names."""
+    """Return query genes corresponding to non-empty g:Profiler intersections.
+
+    g:Profiler documents ``intersections`` as a list of lists aligned with the
+    query Ensembl IDs. We deliberately use the exact submitted query order here
+    instead of the optional metadata mapping: the submitted IDs are already
+    canonical ENSG identifiers, while evidence-code metadata can have a
+    different nested representation when ``no_evidences=False``.
+    """
     if not isinstance(intersections, list):
         return ""
     hits = []
     for i, item in enumerate(intersections):
         if item is None:
             continue
-        if isinstance(item, list):
-            present = len(item) > 0
-        else:
-            present = bool(item)
-        if present:
-            if i < len(query_names):
-                hits.append(str(query_names[i]))
-            elif isinstance(item, str):
-                hits.append(item)
+        present = bool(item) if isinstance(item, list) else bool(item)
+        if present and i < len(query_names):
+            hits.append(str(query_names[i]))
     return ",".join(dict.fromkeys(hits))
 
 
@@ -173,7 +143,7 @@ def _flatten_gprofiler(data, label, fallback_genes):
     rows = []
     if not data:
         return pd.DataFrame()
-    query_names = _query_gene_names(data, fallback_genes)
+    query_names = list(fallback_genes)
     for r in data.get("result", []):
         rows.append({
             "gene_set": label,
