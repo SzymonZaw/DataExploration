@@ -34,8 +34,7 @@ def _strip_dataset_prefix(sample):
 
 
 def _candidate_column_names(dataset,sample):
-    ds,sm=str(dataset).strip().strip('"'),str(sample).strip().strip('"')
-    raw=_strip_dataset_prefix(sm)
+    ds,sm=str(dataset).strip().strip('"'),str(sample).strip().strip('"'); raw=_strip_dataset_prefix(sm)
     return [sm,raw,f"{ds}__{raw}",f"{ds}_{raw}",f"{ds}/{raw}"]
 
 
@@ -57,7 +56,6 @@ def _build_matrix_column_map(matrix,metadata):
 
 
 def _time_from_text(dataset,sample):
-    """Fallback for expression-column labels that contain stage/time text instead of GSM IDs."""
     s=_strip_dataset_prefix(sample).lower().replace("_"," ").replace("-"," ")
     patterns={
         "GSE148158":[(r"48\s*h|48h|day\s*2",48.),(r"72\s*h|72h|day\s*3",72.)],
@@ -71,27 +69,14 @@ def _time_from_text(dataset,sample):
     return np.nan
 
 
-def _time_hours_for_validation(dataset,sample,row_index=None):
-    """Resolve times from GSM IDs first, then from the actual sample-column text."""
-    raw=_strip_dataset_prefix(sample); gsm=re.search(r"GSM(\d+)",raw,re.I); n=int(gsm.group(1)) if gsm else None
-    if dataset=="GSE148158":
-        value={4455240:48.,4455241:48.,4455242:72.,4455243:72.,4455244:48.,4455245:72.}.get(n,np.nan)
-        return value if np.isfinite(value) else _time_from_text(dataset,raw)
-    if dataset=="GSE28688":
+def _time_hours_for_validation(dataset,sample,row_index=None,gsm_time=None):
+    raw=_strip_dataset_prefix(sample); gsm=re.search(r"GSM(\d+)",raw,re.I)
+    if gsm_time is not None and gsm:
+        key=f"GSM{gsm.group(1)}"
+        if key in gsm_time: return float(gsm_time[key])
+    if dataset=="GSE28688" and row_index is not None:
         times=[0.,0.,24.,24.,48.,48.,72.,72.,np.nan,np.nan,np.nan,np.nan,np.nan,np.nan]
-        value=times[row_index] if row_index is not None and 0<=row_index<len(times) else np.nan
-        return value if np.isfinite(value) else _time_from_text(dataset,raw)
-    if dataset=="GSE52052":
-        value=264. if n in {1258008,1258009,1258010,1258011,1258012,1258013} else np.nan
-        return value if np.isfinite(value) else _time_from_text(dataset,raw)
-    if dataset=="GSE67462":
-        groups={0.:range(1647454,1647456),24.:range(1647456,1647458),72.:range(1647458,1647460),120.:range(1647460,1647462),168.:range(1647462,1647464),264.:range(1647464,1647466),360.:range(1647466,1647468),432.:range(1647468,1647470)}
-        for t,ids in groups.items():
-            if n in ids:return t
-        return _time_from_text(dataset,raw)
-    if dataset=="GSE297234":
-        value={8986586:0.,8986587:72.,8986588:168.,8986589:240.,8986590:0.,8986591:72.,8986592:168.,8986593:240.}.get(n,np.nan)
-        return value if np.isfinite(value) else _time_from_text(dataset,raw)
+        if 0<=row_index<len(times) and np.isfinite(times[row_index]): return times[row_index]
     return _time_from_text(dataset,raw)
 
 
@@ -99,7 +84,8 @@ def _print_mapping_diagnostics(matrix,metadata):
     rows=[]
     for ds,g in metadata.groupby("dataset",sort=True):
         timed=g[g.time_hours.notna()]; matched=g[g.matrix_column.notna()]; tm=timed[timed.matrix_column.notna()]
-        rows.append({"dataset":ds,"matrix_columns":int(matched.matrix_column.nunique()),"metadata_samples":len(g),"matched_samples":len(matched),"timed_samples":len(timed),"timed_matched":len(tm),"unique_times":int(tm.time_hours.nunique()),"time_values":",".join(map(str,sorted(tm.time_hours.unique()))),"replicates":",".join(sorted(map(str,tm.replicate.dropna().unique())))})
+        unresolved=g[g.time_hours.isna()]["sample"].astype(str).tolist()[:5]
+        rows.append({"dataset":ds,"matrix_columns":int(matched.matrix_column.nunique()),"metadata_samples":len(g),"matched_samples":len(matched),"timed_samples":len(timed),"timed_matched":len(tm),"unique_times":int(tm.time_hours.nunique()),"time_values":",".join(map(str,sorted(tm.time_hours.unique()))),"unresolved_time_examples":";".join(unresolved),"replicates":",".join(sorted(map(str,tm.replicate.dropna().unique())))})
     diag=pd.DataFrame(rows); diag.to_csv(OUT/"00_mapping_diagnostics.csv",index=False); print("\nStage 2.7 sample-to-matrix mapping:"); print(diag.to_string(index=False)); return diag
 
 
@@ -108,11 +94,11 @@ def _load_common_space():
     if not mp.exists() or not pp.exists(): raise FileNotFoundError("Stage 2.6 outputs are missing; run Dynamics.py first.")
     matrix=pd.read_csv(mp,index_col=0).apply(pd.to_numeric,errors="coerce"); metadata=pd.read_csv(pp)
     metadata["dataset"]=metadata["dataset"].astype(str); metadata["sample"]=metadata["sample"].astype(str)
-    from Dynamics import condition,replicate
+    from Dynamics import condition,replicate,GSM_TIME
     times=[]; conditions=[]; replicates=[]; row_counts={}
     for ds,sample in zip(metadata.dataset,metadata["sample"]):
         raw=_strip_dataset_prefix(sample); idx=row_counts.get(ds,0); row_counts[ds]=idx+1
-        times.append(_time_hours_for_validation(ds,raw,idx if ds=="GSE28688" else None)); conditions.append(condition(ds,raw)); replicates.append(replicate(raw))
+        times.append(_time_hours_for_validation(ds,raw,idx if ds=="GSE28688" else None,GSM_TIME)); conditions.append(condition(ds,raw)); replicates.append(replicate(raw))
     metadata["time_hours"]=times; metadata["condition"]=conditions; metadata["replicate"]=replicates
     metadata=_build_matrix_column_map(matrix,metadata); _print_mapping_diagnostics(matrix,metadata)
     if metadata.matrix_column.notna().sum()==0: raise RuntimeError("Stage 2.7 could not match metadata to Stage 2.6 matrix columns.")
