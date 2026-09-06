@@ -51,7 +51,7 @@ def _write_dataset_roles():
 
 def _parse_args():
     p=argparse.ArgumentParser(description="Run DataExploration validation stages.")
-    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914"):p.add_argument(f"--{name}",action="store_true")
+    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914","stage2915"):p.add_argument(f"--{name}",action="store_true")
     return p.parse_args()
 
 def _require_common_space():
@@ -84,36 +84,31 @@ def main():
         from dynamics.stage296 import run;print(f"Stage 2.9.6 result: {run()}");return
     if args.stage297:
         print("Using existing Stage 2.6/2.9.6 outputs. Skipping Stage 2.6 through Stage 2.9.6.\n\nRunning Stage 2.9.7 biologically anchored consensus-state validation...")
-        from dynamics.stage297 import run
-        print(f"Stage 2.9.7 result: {run()}");return
+        from dynamics.stage297 import run;print(f"Stage 2.9.7 result: {run()}");return
     if args.stage298:
         print("Using existing Stage 2.6/2.9.6 outputs. Skipping Stage 2.6 through Stage 2.9.7.\n\nRunning Stage 2.9.8 biological annotation of consensus genes...")
-        from dynamics.stage298 import run
-        print(f"Stage 2.9.8 result: {run()}");return
+        from dynamics.stage298 import run;print(f"Stage 2.9.8 result: {run()}");return
     if args.stage299:
         print("Using existing Stage 2.6/2.9.8 outputs. Skipping Stage 2.6 through Stage 2.9.8.\n\nRunning Stage 2.9.9 biologically anchored program-state construction and exploratory LODO...")
-        from dynamics.stage299 import run
-        print(f"Stage 2.9.9 result: {run()}");return
+        from dynamics.stage299 import run;print(f"Stage 2.9.9 result: {run()}");return
     if args.stage2910:
         print("Using existing Stage 2.9.1 fold discoveries; running leakage-free Stage 2.9.10 program discovery/enrichment...")
-        from dynamics.stage2910 import run
-        print(f"Stage 2.9.10 result: {run()}");return
+        from dynamics.stage2910 import run;print(f"Stage 2.9.10 result: {run()}");return
     if args.stage2911:
         print("Using existing Stage 2.9.10 enrichment caches; running Stage 2.9.11 instability diagnostics...")
-        from dynamics.stage2911 import run
-        print(f"Stage 2.9.11 result: {run()}");return
+        from dynamics.stage2911 import run;print(f"Stage 2.9.11 result: {run()}");return
     if args.stage2912:
         print("Using existing Stage 2.9.1 fold discoveries; running Stage 2.9.12 gene-selection sensitivity diagnostics...")
-        from dynamics.stage2912 import run
-        print(f"Stage 2.9.12 result: {run()}");return
+        from dynamics.stage2912 import run;print(f"Stage 2.9.12 result: {run()}");return
     if args.stage2913:
         print("Using existing Stage 2.9.1 fold discoveries; running Stage 2.9.13 enrichment bootstrap stability diagnostics...")
-        from dynamics.stage2913 import run
-        print(f"Stage 2.9.13 result: {run()}");return
+        from dynamics.stage2913 import run;print(f"Stage 2.9.13 result: {run()}");return
     if args.stage2914:
         print("Running Stage 2.9.14 fixed, biologically anchored program-state validation; no ODE/state-space model...")
-        from dynamics.stage2914 import run
-        print(f"Stage 2.9.14 result: {run()}");return
+        from dynamics.stage2914 import run;print(f"Stage 2.9.14 result: {run()}");return
+    if args.stage2915:
+        print("Running Stage 2.9.15 pre-Stage-3 readiness gate; no ODE/state-space model...")
+        from dynamics.stage2915 import run;print(f"Stage 2.9.15 result: {run()}");return
     _recover_legacy_metadata();_write_dataset_roles();summary=stage2_7();print(summary.to_string(index=False))
 
 if __name__=="__main__":main()
