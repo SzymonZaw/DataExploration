@@ -54,7 +54,8 @@ def condition_table(expr: pd.DataFrame, dataset: str) -> pd.DataFrame:
             elif "OSK" in s:
                 condition = "OSK"
         elif dataset == "GSE304042":
-            if "CONTROL" in s or "CTRL" in s:
+            # GSE304042 uses GFP-a/b/c as the untreated/control condition.
+            if "CONTROL" in s or "CTRL" in s or s.startswith("GFP"):
                 condition = "CONTROL"
             elif "OSK" in s:
                 condition = "OSK"
