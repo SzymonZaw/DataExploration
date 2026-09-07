@@ -74,7 +74,9 @@ def _score_network(data, net):
 
 def _get_prior_knowledge():
     import decoupler as dc
-    progeny = dc.op.progeny(organism="human", top="full")
+    # decoupler >= 2.x expects a numeric top fraction for PROGENy.
+    # Use all available interactions with a large positive fraction.
+    progeny = dc.op.progeny(organism="human", top=100)
     dorothea = dc.op.dorothea(organism="human", confidence=["A", "B", "C"])
     return progeny, dorothea
 
