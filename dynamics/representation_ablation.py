@@ -74,13 +74,15 @@ def _score_network(data, net):
 
 def _get_prior_knowledge():
     import decoupler as dc
-    # decoupler >= 2.x expects a numeric top value for PROGENy.
-    # Use the largest practical interaction set returned by the installed API.
     progeny = dc.op.progeny(organism="human", top=100)
-    # Current decoupler API calls the DoRothEA confidence filter `levels`.
-    # A is the highest-confidence tier; A-C gives a high-confidence network.
     dorothea = dc.op.dorothea(organism="human", levels=["A", "B", "C"])
     return progeny, dorothea
+
+
+def _tag(result, representation):
+    out = result.copy()
+    out["representation"] = representation
+    return out
 
 
 def run():
@@ -109,18 +111,23 @@ def run():
         time_scale_hours=168.0,
     )
 
-    results = []
-    for representation, rep_data in (
+    representations = (
         ("genes", gene_data),
         ("PROGENy", pathway_data),
         ("DoRothEA", tf_data),
-    ):
-        for seed in SEEDS:
-            result = benchmark(rep_data, cfg=cfg, seed=seed, representation=representation)
-            result["representation"] = representation
-            results.append(result)
+    )
 
-    summary = pd.DataFrame(results)
+    detail_frames = []
+    summary_frames = []
+    for representation, rep_data in representations:
+        detail, summary = benchmark(rep_data, cfg=cfg, seeds=SEEDS)
+        detail_frames.append(_tag(detail, representation))
+        summary_frames.append(_tag(summary, representation))
+
+    detail = pd.concat(detail_frames, ignore_index=True)
+    summary = pd.concat(summary_frames, ignore_index=True)
     OUT.mkdir(parents=True, exist_ok=True)
-    summary.to_csv(OUT / "02_phase1_results.csv", index=False)
+    detail.to_csv(OUT / "02_phase1_results.csv", index=False)
+    summary.to_csv(OUT / "03_phase1_summary.csv", index=False)
+
     return summary
