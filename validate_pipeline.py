@@ -49,7 +49,7 @@ def _write_dataset_roles():
 
 def _parse_args():
     p=argparse.ArgumentParser(description="Run DataExploration validation and model experiments.")
-    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914","stage2915","stage2916","stage2917","stage2918","stage2919","stage2920","stage2921","stage2922","stage2923","stage2924","stage2925","stage2926","stage2927","stage2928","stage2929","stage2930","stage2931","stage2932","stage210","dynamic-state-model"):p.add_argument(f"--{name}",action="store_true")
+    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914","stage2915","stage2916","stage2917","stage2918","stage2919","stage2920","stage2921","stage2922","stage2923","stage2924","stage2925","stage2926","stage2927","stage2928","stage2929","stage2930","stage2931","stage2932","stage210","dynamic-state-model","dynamic-state-model-v2"):p.add_argument(f"--{name}",action="store_true")
     return p.parse_args()
 
 def _require_common_space():
@@ -66,9 +66,10 @@ def main():
     _require_common_space()
     if getattr(args,"dynamic_state_model"):
         print("Running central DynamicStateModel: leakage-free leave-one-dataset-out prediction...")
-        from dynamics.run_dynamic_state_lodo import run
-        print(run())
-        return
+        from dynamics.run_dynamic_state_lodo import run;print(run());return
+    if getattr(args,"dynamic_state_model_v2"):
+        print("Running DynamicStateModel v2: delta-t conditioned leakage-free LODO prefix-to-future forecasting...")
+        from dynamics.run_dynamic_state_v2 import run;print(run());return
     if args.stage210:
         print("Running Stage 2.10 leakage-free conserved biological transition module validation; no ODE/state-space model...")
         from dynamics.stage210 import run;print(f"Stage 2.10 result: {run()}");return
@@ -79,7 +80,7 @@ def main():
     if args.stage291:
         from dynamics.stage291 import stage2_9_1;print(f"Stage 2.9.1 result: {stage2_9_1()}");return
     if args.stage292:
-        from dynamics.stage292 import stage2_9_2;print(f"Stage 2.9.2 result: {stage2_9_2()}");return
+        from dynamics.stage292 import stage2_9_2;print(f"Stage 2.9.2 result: {run()}");return
     if args.stage293:
         from dynamics.stage293_progress import run;print(f"Stage 2.9.3 result: {run()}");return
     if args.stage294:
