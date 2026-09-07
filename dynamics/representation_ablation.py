@@ -57,10 +57,35 @@ def _score_network(data, net):
         acts, score_report = _finite_frame(acts)
         score_report.update({"dataset": ds, "stage": "activity", "n_activity_features": len(acts.columns)})
         audits.append(score_report)
-        scored[ds] = (times, acts.to_numpy(float))
+        scored[ds] = (times, acts)
+
+    # decoupler can return a slightly different set of activities for different
+    # datasets when a network has insufficient measured targets. The frozen
+    # benchmark requires one common feature space across all datasets. Use the
+    # intersection rather than padding missing activities with arbitrary zeros.
+    common_features = None
+    for _, acts in scored.values():
+        features = set(acts.columns)
+        common_features = features if common_features is None else common_features & features
+    common_features = sorted(common_features or [])
+    if len(common_features) < 3:
+        raise ValueError(
+            f"Representation has only {len(common_features)} features shared across "
+            f"{len(scored)} datasets; cannot run the common-space benchmark."
+        )
+
+    aligned = {}
+    for ds, (times, acts) in scored.items():
+        acts = acts.loc[:, common_features]
+        aligned[ds] = (times, acts.to_numpy(float))
+    for report in audits:
+        if report.get("stage") == "activity":
+            report["n_common_activity_features"] = len(common_features)
+    audits.append({"stage": "alignment", "n_common_activity_features": len(common_features), "datasets": len(aligned)})
+
     OUT.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(audits).to_csv(OUT / "01_representation_scoring_audit.csv", index=False)
-    return scored
+    return aligned
 
 
 def _get_prior_knowledge():
