@@ -73,9 +73,7 @@ def _temporal_null(rows):
     for r in rows.itertuples(index=False):
         va,vb=np.asarray(r.a_values,float),np.asarray(r.b_values,float)
         null=np.array([np.corrcoef(va,vb[list(p)])[0,1] for p in null_perms],float)
-        obs=abs(float(r.observed_corr))
-        ge=int(np.sum(np.abs(null)>=obs-1e-12))
-        p=(ge+1)/(len(null)+1)
+        obs=abs(float(r.observed_corr)); ge=int(np.sum(np.abs(null)>=obs-1e-12)); p=(ge+1)/(len(null)+1)
         out.append({"feature":r.feature,"n_exact_null_permutations":len(null),"null_q95":float(np.quantile(null,.95)),"null_q99":float(np.quantile(np.abs(null),.99)),"empirical_two_sided_p":float(p),"passes_null1":bool(obs>np.quantile(np.abs(null),.99) and p<=.05)})
     return pd.DataFrame(out)
 
@@ -87,31 +85,27 @@ def _monotonic_series(rng,start,end):
 def _monotonic_null(rows,seed):
     rng=np.random.default_rng(seed); out=[]
     for r in rows.itertuples(index=False):
-        va,vb=np.asarray(r.a_values,float),np.asarray(r.b_values,float)
-        null=np.empty(N_MONOTONIC)
+        va,vb=np.asarray(r.a_values,float),np.asarray(r.b_values,float); null=np.empty(N_MONOTONIC)
         for i in range(N_MONOTONIC): null[i]=np.corrcoef(_monotonic_series(rng,va[0],va[-1]),_monotonic_series(rng,vb[0],vb[-1]))[0,1]
         out.append({"feature":r.feature,"n_monotonic_controls":N_MONOTONIC,"control_q95":float(np.quantile(null,.95)),"control_q99":float(np.quantile(null,.99)),"passes_null2":bool(r.observed_corr>np.quantile(null,.95))})
     return pd.DataFrame(out)
 
 def _perturbation_activity(network,condition):
-    import decoupler as dc
-    result={}
+    import decoupler as dc; result={}
     for ds,path in PERTURBATION_FILES.items():
         X,_=load_expression(path); labels=condition_table(X,ds).set_index("sample")["condition"]; sig=_signature(X,labels,condition)
         if sig is None: continue
-        sample=pd.DataFrame([sig.to_numpy(float)],columns=sig.index,index=[f"{ds}__{condition}"])
-        acts,_=dc.mt.ulm(data=sample,net=network); result[ds]=acts.iloc[0].apply(float)
+        sample=pd.DataFrame([sig.to_numpy(float)],columns=sig.index,index=[f"{ds}__{condition}"]); acts,_=dc.mt.ulm(data=sample,net=network); result[ds]=acts.iloc[0].apply(float)
     return result
 
 def _context_control(progeny,dorothea,candidates):
     activity={"PROGENy":_perturbation_activity(progeny,"OSK"),"DoRothEA":_perturbation_activity(dorothea,"OSK")}; rows=[]; datasets={}
     for rep,acts in activity.items():
-        datasets[rep]=sorted(acts)
+        datasets[rep]=sorted(acts); n_features=max((len(s) for s in acts.values()),default=0)
         for feature in candidates.get(rep,[]):
-            if len(acts)<2 or any(feature not in a.index for a in acts.values()):
-                rows.append({"representation":rep,"feature":feature,"status":"inconclusive","survives":False}); continue
+            if len(acts)<2 or any(feature not in a.index for a in acts.values()): rows.append({"representation":rep,"feature":feature,"status":"inconclusive","survives":False}); continue
             names=sorted(acts); a,b=acts[names[0]][feature],acts[names[1]][feature]; direction=np.sign(a)==np.sign(b) and a!=0 and b!=0
-            ranks=[s.abs().sort_values(ascending=False).index.tolist().index(feature)+1 for s in acts.values()]; frac=max(ranks)/max(len(ranks),1)
+            ranks=[s.abs().sort_values(ascending=False).index.tolist().index(feature)+1 for s in acts.values()]; frac=max(ranks)/max(n_features,1)
             confound=(rep=="PROGENy" and feature in CONFOUNDER_PROGENY) or (rep=="DoRothEA" and feature in CONFOUNDER_TF)
             rows.append({"representation":rep,"feature":feature,"activity_a":float(a),"activity_b":float(b),"concordant_direction":bool(direction),"worst_rank_fraction":float(frac),"known_delivery_confounded":bool(confound),"survives":bool(direction and frac<=.25 and not confound),"status":"ok"})
     return pd.DataFrame(rows),datasets
