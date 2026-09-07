@@ -186,5 +186,9 @@ def run() -> dict:
     return result
 
 
-if __name__ == "__main__":
+def main() -> None:
     print(json.dumps(run(), indent=2, ensure_ascii=False, default=str))
+
+
+if __name__ == "__main__":
+    main()
