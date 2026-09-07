@@ -48,8 +48,20 @@ class StaticAutoencoder(nn.Module):
 def set_seed(seed):
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
 
+def _trajectory_arrays(item):
+    """Return (times, X) while tolerating optional feature-name metadata.
+
+    Phase 1 representations may carry ``(times, X, feature_names)`` whereas
+    the core benchmark only needs the first two entries. Keeping this adapter
+    here makes the benchmark representation-agnostic without changing the
+    frozen forecasting protocol.
+    """
+    if len(item) < 2:
+        raise ValueError("Trajectory data must contain at least (times, X).")
+    return np.asarray(item[0], dtype=float), np.asarray(item[1], dtype=float)
+
 def training_statistics(train, max_genes):
-    arrays = [np.asarray(X, dtype=float) for _, X in train.values()]
+    arrays = [_trajectory_arrays(item)[1] for item in train.values()]
     raw = np.vstack(arrays)
     med = np.nanmedian(np.where(np.isfinite(raw), raw, np.nan), axis=0)
     med = np.where(np.isfinite(med), med, 0.0)
@@ -67,9 +79,10 @@ def transform(X, keep, mean, std):
 
 def chronological_examples(data, keep, mean, std, history_len=0, time_scale_hours=168.0):
     xs, ys, dts, hist = [], [], [], []
-    for times, Xraw in data.values():
-        order = np.argsort(np.asarray(times, dtype=float))
-        times = np.asarray(times, dtype=float)[order]
+    for item in data.values():
+        times, Xraw = _trajectory_arrays(item)
+        order = np.argsort(times)
+        times = times[order]
         X = transform(Xraw, keep, mean, std)[order]
         for i in range(history_len, len(times) - 1):
             xs.append(X[i]); ys.append(X[i + 1])
@@ -105,7 +118,7 @@ def train_dynamic(train_data, keep, mean, std, cfg, seed, mode):
 
 def train_autoencoder(train_data, keep, mean, std, cfg, seed):
     set_seed(seed)
-    all_x = np.vstack([transform(X, keep, mean, std) for _, X in train_data.values()])
+    all_x = np.vstack([transform(_trajectory_arrays(item)[1], keep, mean, std) for item in train_data.values()])
     xa, ya, _, _ = chronological_examples(train_data, keep, mean, std, 0, cfg.time_scale_hours)
     x_all = torch.tensor(all_x, dtype=torch.float32); x_pairs = torch.tensor(xa, dtype=torch.float32); y_pairs = torch.tensor(ya, dtype=torch.float32)
     model = StaticAutoencoder(x_all.shape[1], cfg.state_dim, cfg.hidden_dim, cfg.dropout)
@@ -120,20 +133,20 @@ def train_autoencoder(train_data, keep, mean, std, cfg, seed):
     return model, Ridge(alpha=1.0).fit(z, zn), best
 
 def fit_pca_transition(train_data, keep, mean, std, cfg):
-    X = np.vstack([transform(v, keep, mean, std) for _, v in train_data.values()])
+    X = np.vstack([transform(_trajectory_arrays(item)[1], keep, mean, std) for item in train_data.values()])
     scaler = StandardScaler().fit(X); pca = PCA(n_components=min(cfg.state_dim, X.shape[0], X.shape[1])).fit(scaler.transform(X))
     xa, ya, _, _ = chronological_examples(train_data, keep, mean, std, 0, cfg.time_scale_hours)
     transition = Ridge(alpha=1.0).fit(pca.transform(scaler.transform(xa)), pca.transform(scaler.transform(ya)))
     return scaler, pca, transition
 
 def _prepare_holdout(heldout_data, keep, mean, std, cfg, order=None):
-    times, Xraw = heldout_data; times=np.asarray(times,dtype=float); order=np.argsort(times) if order is None else np.asarray(order)
-    times=times[order]; X=transform(np.asarray(Xraw,dtype=float),keep,mean,std)[order]
+    times, Xraw = _trajectory_arrays(heldout_data); order=np.argsort(times) if order is None else np.asarray(order)
+    times=times[order]; X=transform(Xraw,keep,mean,std)[order]
     n_prefix=min(max(2,cfg.history_len+1,int(np.ceil(len(times)*cfg.prefix_fraction))),len(times)-1)
     return times,X,n_prefix
 
 def _static_baselines(train_data, heldout_times, heldout_X, n_prefix, keep, mean, std):
-    train_trans={k:(np.asarray(t,dtype=float),transform(v,keep,mean,std)) for k,(t,v) in train_data.items()}
+    train_trans={k:(_trajectory_arrays(item)[0],transform(_trajectory_arrays(item)[1],keep,mean,std)) for k,item in train_data.items()}
     last=heldout_X[n_prefix-1].copy()
     persistence=np.repeat(last[None,:],len(heldout_times)-n_prefix,axis=0)
     nearest=[]
@@ -196,7 +209,9 @@ def evaluate_pca(fitted,train_data,heldout_data,keep,mean,std,cfg,order=None):
     pred=[]; true=[]
     for j in range(n_prefix,len(times)):
         current_z=transition.predict(current_z[None,:])[0]
-        pred.append(scaler.inverse_transform(pca.inverse_transform(current_z[None,:]))[0]); true.append(X[j])
+        # Keep predictions in the same standardized observation space as the
+        # true held-out observations and all other benchmark baselines.
+        pred.append(pca.inverse_transform(current_z[None,:])[0]); true.append(X[j])
     persistence,nearest,linear=_static_baselines(train_data,times,X,n_prefix,keep,mean,std)
     return _metrics(true,pred,persistence,nearest,linear)
 
