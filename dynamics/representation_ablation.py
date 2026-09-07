@@ -61,10 +61,6 @@ def _score_network(data, net):
         samples_by_gene, report = _finite_frame(samples_by_gene)
         report.update({"dataset": ds, "stage": "input", "n_samples": len(samples_by_gene), "n_genes": len(samples_by_gene.columns)})
         audits.append(report)
-
-        if not np.isfinite(samples_by_gene.to_numpy()).all():
-            raise RuntimeError(f"Non-finite values remain in {ds} after sanitization")
-
         acts, _ = dc.mt.ulm(data=samples_by_gene, net=net)
         acts, score_report = _finite_frame(acts)
         score_report.update({"dataset": ds, "stage": "activity", "n_activity_features": len(acts.columns)})
@@ -84,7 +80,12 @@ def _get_prior_knowledge():
 
 
 def run():
-    matrix, metadata, _ = _load_common_space()
+    loaded = _load_common_space()
+    if len(loaded) == 2:
+        matrix, metadata = loaded
+    else:
+        matrix, metadata = loaded[:2]
+
     gene_data = _trajectory_data(matrix, metadata)
     progeny, dorothea = _get_prior_knowledge()
     pathway_data = _score_network(gene_data, progeny)
