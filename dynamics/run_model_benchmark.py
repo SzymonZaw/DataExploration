@@ -27,15 +27,14 @@ def run(max_genes=2000,state_dim=8,hidden_dim=128,epochs=250,lr=1e-3,prefix_frac
     cfg=BenchmarkConfig(max_genes=max_genes,state_dim=state_dim,hidden_dim=hidden_dim,epochs=epochs,lr=lr,prefix_fraction=prefix_fraction)
     for seed in seeds:
         for held_name in sorted(data):
-            train={k:v for k,v in data.items() if k!=held_name}
-            for row in benchmark_fold(train,held_name,cfg,seed):
+            train={k:v for k,v in data.items() if k!=held_name}; heldout_data=data[held_name]
+            for row in benchmark_fold(train,heldout_data,cfg,seed,held_name):
                 rows.append(row); print(f"Benchmark: seed={seed} heldout={held_name} model={row['model']} RMSE={row['rmse_model']:.4f} persistence={row['rmse_persistence']:.4f}",flush=True)
     df=pd.DataFrame(rows); df.to_csv(OUT/"01_model_metrics.csv",index=False)
     summary=df.groupby("model",as_index=False).agg(n_runs=("rmse_model","size"),mean_rmse=("rmse_model","mean"),median_rmse=("rmse_model","median"),mean_improvement_vs_persistence=("improvement_vs_persistence","mean"),q05_improvement_vs_persistence=("improvement_vs_persistence",lambda x:x.quantile(.05)),q95_improvement_vs_persistence=("improvement_vs_persistence",lambda x:x.quantile(.95)))
     summary.to_csv(OUT/"02_model_summary.csv",index=False)
-    pivot=df.pivot_table(index=["seed","heldout_dataset"],columns="model",values="rmse_model")
-    pivot.to_csv(OUT/"03_fold_comparison.csv")
-    print("\nUnified DynamicStateModel benchmark:"); print(summary.to_string(index=False),flush=True); return summary
+    pivot=df.pivot_table(index=["seed","heldout_dataset"],columns="model",values="rmse_model");pivot.to_csv(OUT/"03_fold_comparison.csv")
+    print("\nUnified DynamicStateModel benchmark:");print(summary.to_string(index=False),flush=True);return summary
 
 if __name__=="__main__":
-    p=argparse.ArgumentParser(); p.add_argument("--max-genes",type=int,default=2000); p.add_argument("--state-dim",type=int,default=8); p.add_argument("--hidden-dim",type=int,default=128); p.add_argument("--epochs",type=int,default=250); p.add_argument("--lr",type=float,default=1e-3); p.add_argument("--prefix-fraction",type=float,default=.6); p.add_argument("--seeds",type=int,nargs="+",default=list(SEEDS)); a=p.parse_args(); run(a.max_genes,a.state_dim,a.hidden_dim,a.epochs,a.lr,a.prefix_fraction,tuple(a.seeds))
+    p=argparse.ArgumentParser();p.add_argument("--max-genes",type=int,default=2000);p.add_argument("--state-dim",type=int,default=8);p.add_argument("--hidden-dim",type=int,default=128);p.add_argument("--epochs",type=int,default=250);p.add_argument("--lr",type=float,default=1e-3);p.add_argument("--prefix-fraction",type=float,default=.6);p.add_argument("--seeds",type=int,nargs="+",default=list(SEEDS));a=p.parse_args();run(a.max_genes,a.state_dim,a.hidden_dim,a.epochs,a.lr,a.prefix_fraction,tuple(a.seeds))
