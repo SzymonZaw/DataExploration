@@ -99,10 +99,11 @@ def _context_control(progeny,dorothea,candidates):
     for rep,acts in activity.items():
         datasets[rep]=sorted(acts); n_features=max((len(s) for s in acts.values()),default=0)
         for feature in candidates.get(rep,[]):
-            if len(acts)<2 or any(feature not in a.index for a in acts.values()): rows.append({"representation":rep,"feature":feature,"status":"inconclusive","survives":False}); continue
+            if len(acts)<2 or any(feature not in a.index for a in acts.values()): rows.append({"representation":rep,"feature":feature,"status":"inconclusive","survives":False,"known_delivery_confounded":False}); continue
             names=sorted(acts); a,b=acts[names[0]][feature],acts[names[1]][feature]; direction=np.sign(a)==np.sign(b) and a!=0 and b!=0; ranks=[s.abs().sort_values(ascending=False).index.tolist().index(feature)+1 for s in acts.values()]; frac=max(ranks)/max(n_features,1); confound=(rep=="PROGENy" and feature in CONFOUNDER_PROGENY) or (rep=="DoRothEA" and feature in CONFOUNDER_TF)
             rows.append({"representation":rep,"feature":feature,"activity_a":float(a),"activity_b":float(b),"concordant_direction":bool(direction),"worst_rank_fraction":float(frac),"known_delivery_confounded":bool(confound),"survives":bool(direction and frac<=.25 and not confound),"status":"ok"})
-    return pd.DataFrame(rows),datasets
+    columns=["representation","feature","activity_a","activity_b","concordant_direction","worst_rank_fraction","known_delivery_confounded","survives","status"]
+    return pd.DataFrame(rows,columns=columns),datasets
 
 def _bootstrap_stability(scored,rep,features,seed):
     rng=np.random.default_rng(seed); rows=[]
@@ -123,7 +124,16 @@ def _bootstrap_stability(scored,rep,features,seed):
     return pd.DataFrame(rows)
 
 def _assign_tiers(detail,context,stability):
-    out=detail.merge(context[["representation","feature","survives","known_delivery_confounded"]],on=["representation","feature"],how="left").merge(stability[["representation","feature","stable"]],on=["representation","feature"],how="left"); out["tier"]="NONE"; a=out.passes_null1.fillna(False)&out.passes_null2.fillna(False)&out.conserved_direction.fillna(False)&out.stable.fillna(False); out.loc[a,"tier"]="A"; b=a&out.survives.fillna(False)&~out.known_delivery_confounded.fillna(False); out.loc[b,"tier"]="B"; return out
+    context_cols=["representation","feature","survives","known_delivery_confounded"]
+    context_safe=context.reindex(columns=context_cols,fill_value=False)
+    stability_safe=stability.reindex(columns=["representation","feature","stable"],fill_value=False)
+    out=detail.merge(context_safe,on=["representation","feature"],how="left").merge(stability_safe,on=["representation","feature"],how="left")
+    out["tier"]="NONE"
+    a=out.passes_null1.fillna(False)&out.passes_null2.fillna(False)&out.conserved_direction.fillna(False)&out.stable.fillna(False)
+    out.loc[a,"tier"]="A"
+    b=a&out.survives.fillna(False)&~out.known_delivery_confounded.fillna(False)
+    out.loc[b,"tier"]="B"
+    return out
 
 def _decision(tiered):
     a=tiered[tiered.tier=="A"]
