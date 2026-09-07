@@ -44,17 +44,27 @@ def _write_r_helper(path: Path) -> None:
     path.write_text(r'''args <- commandArgs(trailingOnly=TRUE)
 infile <- args[[1]]
 outfile <- args[[2]]
+
+# These RDS files contain Seurat objects. Seurat itself is required to
+# deserialize the Seurat class; SeuratObject provides the v5 assay API.
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(SeuratObject)
+})
+
 obj <- readRDS(infile)
 
-# Support the common Seurat and SingleCellExperiment layouts without assuming
-# that either class is present at import time.
 if (inherits(obj, "Seurat")) {
   meta <- obj@meta.data
-  assay <- tryCatch(SeuratObject::DefaultAssay(obj), error=function(e) NULL)
-  if (is.null(assay)) assay <- names(obj@assays)[1]
-  counts <- tryCatch(SeuratObject::GetAssayData(obj, assay=assay, layer="counts"),
-                     error=function(e) SeuratObject::GetAssayData(obj, assay=assay, slot="counts"))
+  assay <- obj@active.assay
+  if (is.null(assay) || !nzchar(assay)) assay <- names(obj@assays)[1]
+  if (!"counts" %in% SeuratObject::Layers(obj, assay=assay)) {
+    stop("No counts layer found in assay ", assay,
+         ". Available layers: ", paste(SeuratObject::Layers(obj, assay=assay), collapse=","))
+  }
+  counts <- SeuratObject::LayerData(obj, assay=assay, layer="counts")
 } else if (inherits(obj, "SingleCellExperiment")) {
+  suppressPackageStartupMessages(library(SummarizedExperiment))
   meta <- as.data.frame(SummarizedExperiment::colData(obj))
   counts <- SummarizedExperiment::assay(obj, "counts")
 } else {
@@ -65,7 +75,12 @@ if (inherits(obj, "Seurat")) {
 # day 0/3/7/10 in metadata; no times are invented if parsing fails.
 find_col <- function(nms) {
   low <- tolower(nms)
-  hits <- which(grepl("day|time|hour|dox|oskm|condition", low))
+  priority <- c("day", "time", "hour", "dox", "oskm")
+  for (token in priority) {
+    hits <- which(grepl(token, low))
+    if (length(hits)) return(nms[hits[1]])
+  }
+  hits <- which(grepl("condition", low))
   if (length(hits)) return(nms[hits[1]])
   NA_character_
 }
@@ -140,7 +155,7 @@ def _convert_rds(ds: str, rds: Path, tmp: Path) -> tuple[pd.DataFrame, pd.DataFr
         raise RuntimeError(f"RDS extraction produced no output CSV for {ds}")
     X = pd.read_csv(out_csv, index_col=0)
     meta = pd.read_csv(str(out_csv) + ".meta.csv")
-    X.index = X.index.astype(str).str.upper().str.replace(r"\\.\\d+$", "", regex=True)
+    X.index = X.index.astype(str).str.upper().str.replace(r"\.\d+$", "", regex=True)
     X = X.groupby(level=0).sum()
     return X, meta
 
