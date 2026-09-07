@@ -1,0 +1,5 @@
+# Deep-learning research stack for DynamicStateModel
+numpy
+pandas
+scikit-learn
+torch
