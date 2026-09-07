@@ -63,18 +63,24 @@ def bootstrap(held,train_names,traj):
   if len(times)>=3: rows.append({"bootstrap":k+1,"n_programs":len(times),"transition_time_sd":float(np.std(list(times.values())))})
  return pd.DataFrame(rows)
 def permutation(traj):
- rng=np.random.default_rng(210031); rows=[]
+ """Fast null: precompute all train/heldout program trajectories once, then only permute heldout time order."""
+ rng=np.random.default_rng(210031); pre={}
+ for held in TARGET:
+  if held not in traj: continue
+  train_names=[d for d in TARGET if d!=held and d in traj]; train={d:traj[d] for d in train_names}; fill=train_fill(train); ht,hX,hgenes=traj[held]
+  train_times={}
+  for ds,(t,X,genes) in train.items():
+   train_times[ds]={p:transition(a)[0] for p,a in activity(resample(t,X,fill),genes,fill).items()}
+  common=sorted(set.intersection(*(set(v) for v in train_times.values()))) if train_times else []
+  hA=activity(resample(ht,hX,fill),hgenes,fill); common=[p for p in common if p in hA]
+  if len(common)>=3:
+   pre[held]=(np.array([np.mean([train_times[d][p] for d in train_names]) for p in common]),{p:hA[p] for p in common})
+ rows=[]
  for k in range(N_PERM):
   vals=[]
-  for held in TARGET:
-   if held not in traj: continue
-   train_names=[d for d in TARGET if d!=held and d in traj]; train={d:traj[d] for d in train_names}; fill=train_fill(train); ht,hX,hgenes=traj[held]; train_times={}
-   for ds,(t,X,genes) in train.items(): train_times[ds]={p:transition(a)[0] for p,a in activity(resample(t,X,fill),genes,fill).items()}
-   common=sorted(set.intersection(*(set(v) for v in train_times.values()))) if train_times else []
-   if len(common)<3: continue
-   hA=activity(resample(ht,hX,fill),hgenes,fill); common=[p for p in common if p in hA]
-   if len(common)<3: continue
-   a=np.array([np.mean([train_times[d][p] for d in train_names]) for p in common]); b=np.array([transition(hA[p][rng.permutation(len(hA[p]))])[0] for p in common]); vals.append(spearman(a,b))
+  for a,ha in pre.values():
+   b=np.array([transition(ha[p][rng.permutation(len(ha[p]))])[0] for p in ha])
+   vals.append(spearman(a,b))
   rows.append({"permutation":k+1,"mean_transition_rank_spearman":float(np.nanmean(vals)) if vals else np.nan})
  return pd.DataFrame(rows)
 def run():
@@ -86,7 +92,7 @@ def run():
   if row is not None: rows.append(row); details.append(detail); bt=bootstrap(held,train,traj); bt.insert(0,"heldout_dataset",held); boots.append(bt)
  R=pd.DataFrame(rows)
  if len(R)!=len(names): raise RuntimeError("No valid Stage 2.10 LODO folds.")
- D=pd.concat(details,ignore_index=True); B=pd.concat(boots,ignore_index=True); P=permutation(traj); R.to_csv(OUT/"01_lodo_module_conservation.csv",index=False); D.to_csv(OUT/"02_module_transition_order.csv",index=False); B.to_csv(OUT/"03_bootstrap_transition_stability.csv",index=False); P.to_csv(OUT/"04_time_permutation_null.csv",index=False)
+ D=pd.concat(details,ignore_index=True); B=pd.concat(boots,ignore_index=True); log("running time-permutation null (precomputed trajectories)"); P=permutation(traj); R.to_csv(OUT/"01_lodo_module_conservation.csv",index=False); D.to_csv(OUT/"02_module_transition_order.csv",index=False); B.to_csv(OUT/"03_bootstrap_transition_stability.csv",index=False); P.to_csv(OUT/"04_time_permutation_null.csv",index=False)
  obs=float(R.transition_rank_spearman.mean()); null=P.mean_transition_rank_spearman.dropna().to_numpy(); p=float((1+np.sum(np.abs(null)>=abs(obs)))/(len(null)+1)); order=float(R.pairwise_ordering_agreement.mean()); support=bool(obs>0.5 and order>0.65 and p<0.05)
  S=pd.DataFrame([{"n_trajectory_datasets":len(names),"n_valid_lodo_folds":len(R),"mean_transition_rank_spearman":obs,"mean_transition_time_pearson":float(R.transition_time_pearson.mean()),"mean_pairwise_ordering_agreement":order,"mean_common_programs":float(R.n_common_programs.mean()),"time_permutation_p":p,"conserved_transition_modules_supported":support,"stage3_readiness":False,"interpretation":"LODO validation of fixed biological programs as conserved transition modules; training-only imputation and consensus; bootstrap tests module stability; time permutation tests ordering; no ODE/state-space model."}]); S.to_csv(OUT/"05_stage210_summary.csv",index=False); log("overall:"); print(S.to_string(index=False)); return S
 if __name__=="__main__": run()
