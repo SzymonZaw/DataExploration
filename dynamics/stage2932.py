@@ -36,8 +36,13 @@ def log(x): print(f"Stage 2.9.32: {x}", flush=True)
 
 def finite(X, fill=None):
     X = np.asarray(X, float).copy()
-    med = np.nanmedian(X, axis=0) if fill is None else np.asarray(fill, float)
-    med = np.where(np.isfinite(med), med, 0.0)
+    if fill is None:
+        with np.errstate(all="ignore"):
+            med = np.nanmedian(X, axis=0)
+        med = np.where(np.isfinite(med), med, 0.0)
+    else:
+        med = np.asarray(fill, float)
+        med = np.where(np.isfinite(med), med, 0.0)
     bad = ~np.isfinite(X)
     if bad.any():
         ii = np.where(bad)
@@ -65,7 +70,10 @@ def baseline_scale(Y, baseline=None, amp=None):
     return Z/amp, baseline, amp
 
 def corr(a,b,method="pearson"):
-    a,b=np.asarray(a,float),np.asarray(b,float); ok=np.isfinite(a)&np.isfinite(b)
+    a,b=np.asarray(a,float),np.asarray(b,float)
+    if a.shape != b.shape:
+        raise ValueError(f"Stage 2.9.32 corr shape mismatch: {a.shape} vs {b.shape}")
+    ok=np.isfinite(a)&np.isfinite(b)
     if ok.sum()<3 or np.std(a[ok])<1e-12 or np.std(b[ok])<1e-12:return np.nan
     return float(pd.Series(a[ok]).corr(pd.Series(b[ok]),method=method))
 
@@ -101,7 +109,6 @@ def fit_shared(train, all_genes):
     for t,X,_ in train.values(): states.append(baseline_scale(resample(t,X[:,idx])[0])[0])
     stack=np.vstack(states); pca=PCA(n_components=1,random_state=2932).fit(stack)
     pcs=[pca.transform(s).ravel() for s in states]
-    # Orient the shared axis so its training mean has positive endpoint change.
     shared=np.mean(np.stack(pcs),axis=0)
     if shared[-1]<shared[0]: shared=-shared; pcs=[-p for p in pcs]; pca.components_=-pca.components_
     return genes,idx,scores,pca,shared,pcs
@@ -123,17 +130,14 @@ def prepare_fold(heldout, train_names, traj):
     full_raw,_=resample(t,X[:,idx],med)
     full_state,_,_=baseline_scale(full_raw,base,amp)
     prefix_pc=pca.transform(prefix_state).ravel(); true_pc=float(pca.transform(full_state)[-1,0])
-    # Cross-dataset agreement: held-out observed prefix vs shared training curve.
-    prefix_shared=np.interp(normalize_time(t[:-1]),GRID,shared)
+    # Both arrays are on the common 40-point grid.
+    prefix_shared=shared.copy()
     agreement_p=corr(prefix_pc,prefix_shared); agreement_s=corr(prefix_pc,prefix_shared,"spearman")
-    # Dataset-specific residual and a simple residual-persistence predictor.
     residual=prefix_pc-shared
     residual_final=float(residual[-1])
     pred_shared=float(shared[-1]); pred_dataset=pred_shared+residual_final
     persistence=float(prefix_pc[-1])
-    nearest=float(np.interp(normalize_time(t[:-1])[-1],GRID,shared))
-    # Biological association is measured on the held-out prefix only, with
-    # fixed gene panels defined independently of this fold.
+    nearest=float(shared[-1])
     acts=program_activity(prefix_state,genes)
     biological=[]
     for pid,a in acts.items():
@@ -151,7 +155,7 @@ def permutation_null(artifacts,n=N_PERM):
         vals=[]
         for di,(ds,a) in enumerate(artifacts.items()):
             rng=np.random.default_rng(932000+b*17+di); perm=a["prefix_pc"][rng.permutation(len(a["prefix_pc"]))]
-            pred=float(a["shared"][-1]+(np.mean(perm-a["shared"])))
+            pred=float(a["shared"][-1]+np.mean(perm-a["shared"]))
             err=abs(pred-a["true_pc"]); per=abs(a["persistence"]-a["true_pc"]); vals.append(per-err)
         rows.append({"permutation":b+1,"mean_improvement_vs_persistence":float(np.mean(vals)) if vals else np.nan})
     return pd.DataFrame(rows)
@@ -174,8 +178,6 @@ def run():
     P=permutation_null(artifacts);P.to_csv(OUT/"03_time_permutation_null.csv",index=False)
     obs=float(R.improvement_vs_persistence.mean()); nv=P.mean_improvement_vs_persistence.dropna().to_numpy(float)
     p=float((1+np.sum(nv>=obs))/(len(nv)+1)) if len(nv) else np.nan
-    # Invariance requires positive cross-dataset agreement, small residual
-    # relative to shared signal, and reproducible biological association.
     mean_agree=float(R.agreement_spearman.mean()); mean_resid=float(R.residual_rms.mean())
     bio_strength=float(B.component_program_spearman.abs().mean()) if len(B) else np.nan
     support=bool(mean_agree>0.5 and obs>0 and np.isfinite(p) and p<0.05 and bio_strength>0.3)
