@@ -159,7 +159,7 @@ def evaluate_dynamic(model,train_data,heldout_data,keep,mean,std,cfg,mode,order=
     if n_prefix>=2 and times[n_prefix-1]!=times[n_prefix-2]: slope=(X[n_prefix-1]-X[n_prefix-2])/(times[n_prefix-1]-times[n_prefix-2])
     else: slope=np.zeros_like(persist_value)
     for j in range(n_prefix,len(times)):
-        p,z_next=predict_dynamic(model,current,(float(times[j])-current_t)/scale,history if mode=="memory" else None,mode)
+        p,_=predict_dynamic(model,current,(float(times[j])-current_t)/scale,history if mode=="memory" else None,mode)
         pred.append(p); true.append(X[j]); persistence.append(persist_value)
         nearest.append(np.mean([xx[int(np.argmin(np.abs(tt-times[j])))] for tt,xx in train_trans.values()],axis=0))
         linear.append(X[n_prefix-1]+slope*(times[j]-times[n_prefix-1]))
@@ -217,10 +217,21 @@ def benchmark(data,cfg,seeds):
             train={k:v for k,v in data.items() if k!=held}; rows,runs=benchmark_fold(train,data[held],cfg,seed,held); all_rows.extend(rows)
             for m,r in runs.items(): all_runs[m].append(r)
     df=pd.DataFrame(all_rows)
-    summary=df.groupby("model",as_index=False).agg(n_runs=("rmse_model","size"),mean_rmse=("rmse_model","mean"),median_rmse=("rmse_model","median"),mean_improvement_vs_persistence=("improvement_vs_persistence","mean"),q05_improvement_vs_persistence=("improvement_vs_persistence",lambda x:x.quantile(.05)),q95_improvement_vs_persistence=("improvement_vs_persistence",lambda x:x.quantile(.95)))
+    summary=df.groupby("model",as_index=False).agg(
+        n_runs=("rmse_model","size"),
+        mean_rmse=("rmse_model","mean"),
+        median_rmse=("rmse_model","median"),
+        mean_improvement_vs_persistence=("improvement_vs_persistence","mean"),
+        q05_improvement_vs_persistence=("improvement_vs_persistence",lambda x:x.quantile(.05)),
+        q95_improvement_vs_persistence=("improvement_vs_persistence",lambda x:x.quantile(.95)),
+        mean_improvement_vs_nearest=("improvement_vs_nearest","mean"),
+        q05_improvement_vs_nearest=("improvement_vs_nearest",lambda x:x.quantile(.05)),
+        q95_improvement_vs_nearest=("improvement_vs_nearest",lambda x:x.quantile(.95)),
+    )
     pvals=[]
     for idx,m in enumerate(summary.model):
-        obs,p,null=permutation_null(all_runs[m],cfg.permutation_n,seed=9000+idx); pvals.append({"model":m,"observed_mean_improvement":obs,"permutation_p":p,"null_mean":float(null.mean()),"null_q95":float(np.quantile(null,.95))})
+        obs,p,null=permutation_null(all_runs[m],cfg.permutation_n,seed=9000+idx)
+        pvals.append({"model":m,"observed_mean_improvement":obs,"permutation_p":p,"null_mean":float(null.mean()),"null_q95":float(np.quantile(null,.95))})
     summary=summary.merge(pd.DataFrame(pvals),on="model",how="left")
-    summary["predictive_support"]=(summary.mean_improvement_vs_persistence>0)&(summary.q05_improvement_vs_persistence>0)&(summary.permutation_p<.05)
+    summary["predictive_support"]=(summary.mean_improvement_vs_persistence>0)&(summary.q05_improvement_vs_persistence>0)&(summary.mean_improvement_vs_nearest>0)&(summary.q05_improvement_vs_nearest>0)&(summary.permutation_p<.05)
     return df,summary
