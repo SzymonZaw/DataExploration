@@ -1,224 +1,190 @@
-"""Stage 2.11: perturbation-conditioned, biologically interpretable dynamics.
+"""Stage 2.11: perturbation-conditioned mechanism discovery.
 
-This is a deliberately conservative research benchmark. It uses the existing
-trajectory POC outputs as the starting point and asks whether pathway/TF
-activity plus explicit perturbation information improves cross-dataset
-prediction of the next observed state.
+Consumes the real Yamanaka POC inputs. The two GSE297234 RDS objects provide
+0/3/7/10-day trajectories; GSE297233/GSE304042 provide independent intervention
+signatures. The stage generates interpretable pathway/TF candidates and reports
+whether perturbation-conditioned forecasting is identifiable.
 
-No causal or lineage claim is made here.
+No causal or lineage claim is made.
 """
-
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
-from typing import Dict, Iterable, Tuple
+import tempfile
 
 import numpy as np
 import pandas as pd
 
+from .yamanaka_poc import condition_table, load_expression, _signature
+from .yamanaka_trajectory_poc import RDS_FILES, _convert_rds, _log_cpm
 
-DATASETS = ("GM00731", "HFIB_COMBINED")
-
-
-def _read_matrix(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path, index_col=0)
-    if df.empty:
-        raise ValueError(f"Empty matrix: {path}")
-    return df
-
-
-def _find_column(df: pd.DataFrame, tokens: Iterable[str]) -> str | None:
-    for col in df.columns:
-        name = str(col).lower()
-        if any(token in name for token in tokens):
-            return col
-    return None
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / "Data"
+OUT = ROOT / "results" / "Dynamics" / "stage2_11_mechanism_discovery"
+PERTURBATION_FILES = {
+    "GSE297233": DATA / "GSE297233_raw_counts_matrix.csv.gz",
+    "GSE304042": DATA / "GSE304042_5_ARPE_single_triple_OSK_30-1011800743.csv.gz",
+}
 
 
-def _standardize_activities(df: pd.DataFrame) -> pd.DataFrame:
-    """Column-wise z-score while retaining constant columns as zero."""
-    values = df.astype(float)
-    mean = values.mean(axis=0)
-    std = values.std(axis=0, ddof=0).replace(0, 1.0)
-    return (values - mean) / std
+def _activity_networks():
+    try:
+        import decoupler as dc
+    except ImportError as exc:
+        raise RuntimeError("Stage 2.11 requires decoupler. Install requirements-ai.txt.") from exc
+    return (
+        dc.op.progeny(organism="human", top=100),
+        dc.op.dorothea(organism="human", levels=["A", "B", "C"]),
+    )
 
 
-def _load_inputs(root: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Load Stage 2.11 trajectory/representation artifacts if present.
+def _score_time_series(X: pd.DataFrame, meta: pd.DataFrame, net: pd.DataFrame) -> pd.DataFrame:
+    import decoupler as dc
 
-    The function accepts a small number of conventional filenames so the
-    benchmark can be run against locally generated Phase 1 outputs without
-    coupling the scientific logic to one artifact layout.
-    """
-    candidates = {
-        "activities": [
-            root / "results" / "representation_activities.csv",
-            root / "results" / "phase1_activities.csv",
-            root / "results" / "yamanaka_activities.csv",
-        ],
-        "metadata": [
-            root / "results" / "representation_metadata.csv",
-            root / "results" / "phase1_metadata.csv",
-            root / "results" / "yamanaka_metadata.csv",
-        ],
+    meta = meta.copy()
+    meta["day"] = pd.to_numeric(meta["day"], errors="coerce")
+    meta = meta.dropna(subset=["day"])
+    meta["group"] = meta["group"].astype(str)
+    groups = [g for g in meta.group.tolist() if g in X.columns]
+    meta = meta[meta.group.isin(groups)].sort_values(["day", "group"])
+    X = _log_cpm(X.loc[:, meta.group.tolist()])
+    samples = X.T.copy()
+    samples.index = meta.group.tolist()
+    acts, _ = dc.mt.ulm(data=samples, net=net)
+    acts = acts.apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    acts["day"] = meta.set_index("group").loc[acts.index, "day"].astype(float)
+    return acts
+
+
+def _trajectory_activity_summary(scored: dict[str, pd.DataFrame]) -> dict:
+    names = sorted(scored)
+    if len(names) < 2:
+        return {"status": "insufficient_datasets"}
+    a, b = names[:2]
+    A, B = scored[a], scored[b]
+    features = sorted((set(A.columns) & set(B.columns)) - {"day"})
+    rows = []
+    for feature in features:
+        aa = A.groupby("day")[feature].mean()
+        bb = B.groupby("day")[feature].mean()
+        common = sorted(set(aa.index) & set(bb.index))
+        if len(common) < 3:
+            continue
+        va, vb = aa.loc[common].to_numpy(float), bb.loc[common].to_numpy(float)
+        corr = np.corrcoef(va, vb)[0, 1] if np.std(va) > 0 and np.std(vb) > 0 else np.nan
+        ta = pd.Series(common).corr(pd.Series(va), method="spearman")
+        tb = pd.Series(common).corr(pd.Series(vb), method="spearman")
+        rows.append({
+            "feature": feature,
+            "trajectory_correlation": float(corr) if np.isfinite(corr) else np.nan,
+            "spearman_day_dataset_a": float(ta) if pd.notna(ta) else np.nan,
+            "spearman_day_dataset_b": float(tb) if pd.notna(tb) else np.nan,
+            "conserved_direction": bool(np.sign(va[-1] - va[0]) == np.sign(vb[-1] - vb[0])),
+        })
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return {"status": "no_common_activity_features"}
+    out["temporal_signal"] = (out.spearman_day_dataset_a.abs() + out.spearman_day_dataset_b.abs()) / 2
+    out = out.sort_values(["conserved_direction", "temporal_signal", "trajectory_correlation"], ascending=[False, False, False])
+    return {
+        "status": "ok",
+        "dataset_a": a,
+        "dataset_b": b,
+        "n_common_features": int(len(out)),
+        "n_conserved_direction": int(out.conserved_direction.sum()),
+        "median_trajectory_correlation": float(out.trajectory_correlation.median()),
+        "top_candidates": out.head(20).to_dict("records"),
     }
-    found = {}
-    for kind, paths in candidates.items():
-        for path in paths:
-            if path.exists():
-                found[kind] = path
-                break
-    if set(found) != {"activities", "metadata"}:
-        raise FileNotFoundError(
-            "Stage 2.11 input artifacts not found. Expected an activities CSV "
-            "and a metadata CSV under results/. Run the representation/trajectory "
-            "pipeline first."
-        )
-    return _read_matrix(found["activities"]), _read_matrix(found["metadata"])
 
 
-def _align(activities: pd.DataFrame, metadata: pd.DataFrame) -> pd.DataFrame:
-    common = activities.index.intersection(metadata.index)
-    if len(common) < 4:
-        raise ValueError(f"Only {len(common)} samples/groups can be aligned")
-    out = metadata.loc[common].copy()
-    acts = activities.loc[common].copy()
-    out = out.join(acts.add_prefix("ACT_"))
-    return out
+def _perturbation_evidence() -> dict:
+    exprs, labels = {}, {}
+    for ds, path in PERTURBATION_FILES.items():
+        X, _ = load_expression(path)
+        labels[ds] = condition_table(X, ds).set_index("sample")["condition"]
+        exprs[ds] = X
+
+    signatures = {}
+    for ds, X in exprs.items():
+        lab = labels[ds]
+        for condition in sorted(set(lab) - {"CONTROL", "OTHER"}):
+            sig = _signature(X, lab, condition)
+            if sig is not None:
+                signatures[(ds, condition)] = sig
+
+    rows = []
+    for (ds, condition), sig in signatures.items():
+        top = sig.abs().sort_values(ascending=False).head(100)
+        rows.append({
+            "dataset": ds,
+            "perturbation": condition,
+            "n_genes": int(sig.notna().sum()),
+            "mean_abs_effect": float(sig.abs().mean()),
+            "top100_mean_abs_effect": float(top.mean()),
+        })
+
+    osk = {ds: sig for (ds, condition), sig in signatures.items() if condition == "OSK"}
+    agreement = None
+    if len(osk) >= 2:
+        names = sorted(osk)
+        common = osk[names[0]].index.intersection(osk[names[1]].index)
+        if len(common) >= 100:
+            agreement = {
+                "dataset_a": names[0],
+                "dataset_b": names[1],
+                "n_common_genes": int(len(common)),
+                "pearson": float(osk[names[0]].loc[common].corr(osk[names[1]].loc[common])),
+                "spearman": float(osk[names[0]].loc[common].corr(osk[names[1]].loc[common], method="spearman")),
+            }
+    return {"perturbation_signatures": rows, "osk_cross_dataset": agreement}
 
 
-def _parse_day(series: pd.Series) -> pd.Series:
-    text = series.astype(str).str.lower()
-    result = pd.Series(np.nan, index=series.index, dtype=float)
-    for day in (0, 3, 7, 10):
-        mask = text.str.contains(rf"(?:^|[^0-9]){day}(?:$|[^0-9])", regex=True)
-        result.loc[mask] = float(day)
+def run() -> dict:
+    OUT.mkdir(parents=True, exist_ok=True)
+    progeny, dorothea = _activity_networks()
+    scored = {"PROGENy": {}, "DoRothEA": {}}
+    dataset_audits = []
+
+    with tempfile.TemporaryDirectory(prefix="stage2_11_", dir=str(ROOT)) as td:
+        tmp = Path(td)
+        for ds, rds in RDS_FILES.items():
+            X, meta = _convert_rds(ds, rds, tmp)
+            dataset_audits.append({
+                "dataset": ds,
+                "n_genes": int(X.shape[0]),
+                "n_groups": int(X.shape[1]),
+                "days": sorted(pd.to_numeric(meta.day, errors="coerce").dropna().unique().tolist()),
+            })
+            scored["PROGENy"][ds] = _score_time_series(X, meta, progeny)
+            scored["DoRothEA"][ds] = _score_time_series(X, meta, dorothea)
+
+    activity_results = {}
+    for representation, values in scored.items():
+        feature_dir = OUT / representation
+        feature_dir.mkdir(parents=True, exist_ok=True)
+        for ds, frame in values.items():
+            frame.to_csv(feature_dir / f"{ds}_activity.csv")
+        activity_results[representation] = _trajectory_activity_summary(values)
+
+    perturbation = _perturbation_evidence()
+    result = {
+        "status": "ok",
+        "dataset_audit": dataset_audits,
+        "activity_representations": activity_results,
+        "independent_perturbation_evidence": perturbation,
+        "identifiability": {
+            "trajectory_datasets_have_multiple_perturbations": False,
+            "reason": "Both GSE297234 trajectory objects represent OSKM reprogramming, so a perturbation coefficient cannot be identified from these time-resolved data alone.",
+            "next_experiment": "Add timed datasets with distinct interventions and test whether candidate pathway/TF activities predict intervention-specific state changes."
+        },
+        "interpretation_guardrail": "Activity trajectories and perturbation signatures generate falsifiable mechanism candidates; they do not establish causality without intervention-specific temporal validation.",
+    }
+    (OUT / "stage2_11_mechanism_discovery_summary.json").write_text(
+        json.dumps(result, indent=2, ensure_ascii=False, default=str), encoding="utf-8"
+    )
     return result
 
 
-def _prepare(df: pd.DataFrame) -> pd.DataFrame:
-    day_col = _find_column(df, ("day", "time", "hour"))
-    if day_col is None:
-        raise ValueError("No day/time metadata column found")
-    days = _parse_day(df[day_col])
-    df = df.copy()
-    df["day"] = days
-    df = df[df["day"].notna()].copy()
-    dataset_col = _find_column(df, ("dataset", "study"))
-    if dataset_col is None:
-        df["dataset"] = "UNKNOWN"
-    else:
-        df["dataset"] = df[dataset_col].astype(str)
-    perturb_col = _find_column(df, ("perturb", "condition", "treatment", "factor", "group"))
-    df["perturbation"] = df[perturb_col].astype(str) if perturb_col else "UNKNOWN"
-    return df
-
-
-def _fit_ridge(X: np.ndarray, Y: np.ndarray, alpha: float = 1.0) -> np.ndarray:
-    X1 = np.column_stack([np.ones(len(X)), X])
-    reg = np.eye(X1.shape[1])
-    reg[0, 0] = 0.0
-    return np.linalg.solve(X1.T @ X1 + alpha * reg, X1.T @ Y)
-
-
-def _predict(beta: np.ndarray, X: np.ndarray) -> np.ndarray:
-    return np.column_stack([np.ones(len(X)), X]) @ beta
-
-
-def _rmse(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.sqrt(np.mean((a - b) ** 2)))
-
-
-def _build_transitions(df: pd.DataFrame, activity_cols: list[str]) -> list[dict]:
-    rows = []
-    for dataset, sub in df.groupby("dataset"):
-        sub = sub.sort_values("day")
-        for _, row in sub.iterrows():
-            future = sub[sub["day"] > row["day"]]
-            if future.empty:
-                continue
-            nxt = future.iloc[0]
-            rows.append({"dataset": dataset, "day": row["day"], "next_day": nxt["day"], "row": row, "next": nxt})
-    return rows
-
-
-def run(root: Path) -> Dict:
-    activities, metadata = _load_inputs(root)
-    df = _align(activities, metadata)
-    df = _prepare(df)
-
-    activity_cols = [c for c in df.columns if c.startswith("ACT_")]
-    if not activity_cols:
-        raise ValueError("No activity features found")
-    df[activity_cols] = _standardize_activities(df[activity_cols])
-
-    transitions = _build_transitions(df, activity_cols)
-    if len(transitions) < 2:
-        raise ValueError("Not enough temporal transitions for a benchmark")
-
-    # Deterministic leave-one-dataset-out benchmark.
-    results = []
-    for held_out in sorted({t["dataset"] for t in transitions}):
-        train = [t for t in transitions if t["dataset"] != held_out]
-        test = [t for t in transitions if t["dataset"] == held_out]
-        if not train or not test:
-            continue
-
-        def matrix(ts, include_perturbation: bool):
-            X, Y = [], []
-            perturb_levels = sorted({str(t["row"]["perturbation"]) for t in train})
-            for t in ts:
-                x = t["row"][activity_cols].to_numpy(dtype=float)
-                if include_perturbation:
-                    p = np.array([float(str(t["row"]["perturbation"]) == level) for level in perturb_levels])
-                    x = np.concatenate([x, p])
-                X.append(x)
-                Y.append(t["next"][activity_cols].to_numpy(dtype=float))
-            return np.asarray(X), np.asarray(Y)
-
-        Xs, Ys = matrix(train, False)
-        Xp, Yp = matrix(train, True)
-        Xt, Yt = matrix(test, False)
-        # For held-out perturbation categories, one-hot columns naturally become zero.
-        Xtt, _ = matrix(test, True)
-
-        beta_state = _fit_ridge(Xs, Ys)
-        beta_pert = _fit_ridge(Xp, Yp)
-        pred_state = _predict(beta_state, Xt)
-        pred_pert = _predict(beta_pert, Xtt)
-
-        persistence = np.asarray([t["row"][activity_cols].to_numpy(float) for t in test])
-        nearest = persistence.copy()
-        # nearest-time baseline is identical to persistence here for strictly
-        # ordered sample-level transitions; retained explicitly for auditability.
-
-        results.append({
-            "held_out_dataset": held_out,
-            "n_test_transitions": len(test),
-            "state_only_rmse": _rmse(pred_state, Yt),
-            "state_plus_perturbation_rmse": _rmse(pred_pert, Yt),
-            "persistence_rmse": _rmse(persistence, Yt),
-            "nearest_rmse": _rmse(nearest, Yt),
-        })
-
-    return {
-        "status": "ok",
-        "n_features": len(activity_cols),
-        "n_aligned_groups": int(len(df)),
-        "n_transitions": len(transitions),
-        "folds": results,
-        "guardrail": "Predictive improvement is evidence of useful state/perturbation information, not causal mechanism discovery.",
-    }
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path.cwd())
-    args = parser.parse_args()
-    print(json.dumps(run(args.root), indent=2, ensure_ascii=False))
-
-
 if __name__ == "__main__":
-    main()
+    print(json.dumps(run(), indent=2, ensure_ascii=False, default=str))
