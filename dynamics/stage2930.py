@@ -30,16 +30,24 @@ def select_genes(train,all_genes):
  if len(chosen)<MIN_GENES: chosen=order[:min(MIN_GENES,len(order))]
  return np.asarray(all_genes)[chosen[:MAX_GENES]]
 def load_trajectories():
- from dynamics.validation import _load_common_space,_time_hours_for_validation,_strip_dataset_prefix
- m,meta=_load_common_space(); meta=meta[meta["dataset"].astype(str).isin(TARGET)].copy(); meta["matrix_column"]=meta["matrix_column"].astype(str)
- meta["time_hours"]=[_time_hours_for_validation(str(r["dataset"]),_strip_dataset_prefix(str(r["sample"])),None) for _,r in meta.iterrows()]; meta["time_hours"]=pd.to_numeric(meta["time_hours"],errors="coerce")
- out={}
- for ds in TARGET:
-  g=meta[(meta["dataset"].astype(str)==ds)&np.isfinite(meta["time_hours"])].copy()
-  if g["time_hours"].nunique()<3: continue
-  expr=m.loc[:,list(g["matrix_column"])].T.copy(); expr.index=g["time_hours"].to_numpy(float); expr=expr.groupby(level=0,sort=True).mean()
-  out[ds]=(expr.index.to_numpy(float),expr.to_numpy(float),list(m.index))
- return out
+    # Reuse Stage 2.7's validated sample/time/matrix mapping.
+    from dynamics.validation import _load_common_space
+    m,meta=_load_common_space()
+    meta=meta[meta["dataset"].astype(str).isin(TARGET)].copy()
+    out={}
+    for ds in TARGET:
+        g=meta[(meta["dataset"].astype(str)==ds)&meta["matrix_column"].notna()&meta["time_hours"].notna()].copy()
+        g["time_hours"]=pd.to_numeric(g["time_hours"],errors="coerce")
+        g=g[np.isfinite(g["time_hours"].to_numpy(float))]
+        if g["time_hours"].nunique()<3:
+            log(f"{ds}: skipped; timed samples={len(g)}, unique times={g['time_hours'].nunique()}")
+            continue
+        expr=m.loc[:,g["matrix_column"].astype(str).tolist()].T.copy()
+        expr.index=g["time_hours"].to_numpy(float)
+        expr=expr.groupby(level=0,sort=True).mean()
+        log(f"{ds}: {len(g)} timed samples -> {len(expr)} unique timepoints")
+        out[ds]=(expr.index.to_numpy(float),expr.to_numpy(float),list(m.index))
+    return out
 def fit_artifact(train,all_genes):
  genes=select_genes(train,all_genes); idx=gene_indices(genes,all_genes); states=[normalize_with_stats(resample(t,X[:,idx]))[0] for t,X,_ in train.values()]; Z=np.vstack(states); pca=PCA(n_components=min(N_PC,Z.shape[0],Z.shape[1]),random_state=2930).fit(Z); template=np.mean(np.stack([pca.transform(Y) for Y in states]),0); return genes,pca,template
 def dtw_path(A,B):
