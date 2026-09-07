@@ -35,7 +35,7 @@ def training_statistics(train,max_genes):
     return keep,mean,std
 
 def transform(X,keep,mean,std):
-    X=X[:,keep]; return (np.where(np.isfinite(X),X,mean)-mean)/std
+    X=np.asarray(X)[:,keep]; return (np.where(np.isfinite(X),X,mean)-mean)/std
 
 def chronological_examples(data,keep,mean,std,history_len=0):
     xs=[]; ys=[]; dts=[]; hist=[]
@@ -72,13 +72,14 @@ def train_autoencoder(train_data,keep,mean,std,cfg,seed):
     with torch.no_grad(): z=model.encode(x).numpy(); zn=model.encode(y).numpy()
     return model,Ridge(alpha=1.0).fit(z,zn)
 
-def _dynamic_history(model,history_raw,keep,mean,std):
-    if history_raw is None or len(history_raw)==0: return None
-    raw=np.asarray(history_raw); tensor=torch.tensor(transform(raw,keep,mean,std)[None,:,:],dtype=torch.float32); b,t,d=tensor.shape
+def _dynamic_history(model,history_transformed):
+    if history_transformed is None or len(history_transformed)==0: return None
+    tensor=torch.tensor(np.asarray(history_transformed,dtype=np.float32)[None,:,:],dtype=torch.float32)
+    b,t,d=tensor.shape
     with torch.no_grad(): return model.encode(tensor.reshape(b*t,d)).reshape(b,t,-1)
 
-def predict_dynamic(model,current,dt,history_raw,keep,mean,std,mode):
-    x=torch.tensor(np.asarray(current)[None,:],dtype=torch.float32); ctx=torch.tensor([[float(dt)]],dtype=torch.float32) if mode in {"delta_t","memory"} else None; h=_dynamic_history(model,history_raw,keep,mean,std) if mode=="memory" else None
+def predict_dynamic(model,current,dt,history_transformed,mode):
+    x=torch.tensor(np.asarray(current)[None,:],dtype=torch.float32); ctx=torch.tensor([[float(dt)]],dtype=torch.float32) if mode in {"delta_t","memory"} else None; h=_dynamic_history(model,history_transformed) if mode=="memory" else None
     with torch.no_grad(): return model.predict_observation(x,context=ctx,history=h).numpy()[0]
 
 def _metrics(true,pred,persistence,nearest,linear):
@@ -96,17 +97,17 @@ def evaluate_dynamic(model,train_data,heldout_data,keep,mean,std,cfg,mode,order=
     current=X[n_prefix-1].copy(); current_t=float(times[n_prefix-1]); history=list(X[max(0,n_prefix-cfg.history_len):n_prefix]) if mode=="memory" else []
     true=[]; pred=[]; persistence=[]; nearest=[]; linear=[]; train_trans={k:(np.asarray(t),transform(v,keep,mean,std)) for k,(t,v) in train_data.items()}
     for j in range(n_prefix,len(times)):
-        p=predict_dynamic(model,current,(float(times[j])-current_t)/scale,history,keep,mean,std,mode); pred.append(p); true.append(X[j]); persistence.append(current)
+        previous=current.copy(); previous_t=current_t
+        p=predict_dynamic(model,current,(float(times[j])-current_t)/scale,history if mode=="memory" else None,mode); pred.append(p); true.append(X[j]); persistence.append(current)
         nearest.append(np.mean([xx[int(np.argmin(np.abs(tt-times[j])))] for tt,xx in train_trans.values()],axis=0))
-        if mode=="memory" and len(history)>=2 and current_t!=float(times[j-1]): linear.append(history[-1]+((times[j]-current_t)/(current_t-times[j-1]))*(history[-1]-history[-2]))
-        elif len(history)>=2 and current_t!=float(times[j-1]): linear.append(history[-1]+((times[j]-current_t)/(current_t-times[j-1]))*(history[-1]-history[-2]))
-        else: linear.append(current)
+        if len(history)>=2 and previous_t!=float(times[j-1]): linear.append(history[-1]+((times[j]-previous_t)/(previous_t-times[j-1]))*(history[-1]-history[-2]))
+        else: linear.append(previous)
         current=p; current_t=float(times[j])
         if mode=="memory": history=(history+[current])[-cfg.history_len:]
     return _metrics(true,pred,persistence,np.asarray(nearest),np.asarray(linear))
 
 def evaluate_autoencoder(model,transition,heldout_data,keep,mean,std,cfg,order=None):
-    times,X,n_prefix=_prepare_holdout(heldout_data,keep,mean,std,cfg,order); with_no_grad=[]
+    times,X,n_prefix=_prepare_holdout(heldout_data,keep,mean,std,cfg,order)
     with torch.no_grad(): Z=model.encode(torch.tensor(X,dtype=torch.float32)).numpy()
     true=Z[n_prefix:]; pred=[]; cur=Z[n_prefix-1].copy()
     for _ in range(n_prefix,len(times)): cur=transition.predict(cur[None,:])[0]; pred.append(cur.copy())
@@ -124,7 +125,7 @@ def benchmark_fold(train_data,heldout_data,cfg,seed,heldout_name):
         if mode=="pca": r=evaluate_pca(train_data,heldout_data,keep,mean,std,cfg); fitted=None; train_loss=np.nan
         elif mode=="autoencoder": model,transition=train_autoencoder(train_data,keep,mean,std,cfg,seed); r=evaluate_autoencoder(model,transition,heldout_data,keep,mean,std,cfg); fitted=(model,transition); train_loss=np.nan
         else: model,train_loss=train_dynamic(train_data,keep,mean,std,cfg,seed,mode); r=evaluate_dynamic(model,train_data,heldout_data,keep,mean,std,cfg,mode); fitted=model
-        runs[mode]={"model":mode,"seed":seed,"heldout_dataset":heldout_name,"train_data":train_data,"heldout_data":heldout_data,"keep":keep,"mean":mean,"std":std,"cfg":cfg,"fitted":fitted,"observed":r}; row={"seed":seed,"heldout_dataset":heldout_name,"model":mode,"n_selected_genes":len(keep),**{k:v for k,v in r.items() if not k.startswith("_")}}; row["train_loss"]=train_loss; rows.append(row)
+        runs[mode]={"model":mode,"seed":seed,"heldout_dataset":heldout_name,"train_data":train_data,"heldout_data":heldout_data,"keep":keep,"mean":mean,"std":std,"cfg":cfg,"fitted":fitted,"observed":r}; rows.append({"seed":seed,"heldout_dataset":heldout_name,"model":mode,"n_selected_genes":len(keep),**{k:v for k,v in r.items() if not k.startswith("_")},"train_loss":train_loss})
     return rows,runs
 
 def permutation_null(runs,n_perm,seed=12345):
