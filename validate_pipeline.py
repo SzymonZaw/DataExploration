@@ -49,7 +49,7 @@ def _write_dataset_roles():
 
 def _parse_args():
     p=argparse.ArgumentParser(description="Run DataExploration validation and model experiments.")
-    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914","stage2915","stage2916","stage2917","stage2918","stage2919","stage2920","stage2921","stage2922","stage2923","stage2924","stage2925","stage2926","stage2927","stage2928","stage2929","stage2930","stage2931","stage2932","stage210","dynamic-state-model","dynamic-state-model-v2","dynamic-state-memory"):p.add_argument(f"--{name}",action="store_true")
+    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914","stage2915","stage2916","stage2917","stage2918","stage2919","stage2920","stage2921","stage2922","stage2923","stage2924","stage2925","stage2926","stage2927","stage2928","stage2929","stage2930","stage2931","stage2932","stage210","dynamic-state-model","dynamic-state-model-v2","dynamic-state-memory","dynamic-state-benchmark"):p.add_argument(f"--{name}",action="store_true")
     return p.parse_args()
 
 def _require_common_space():
@@ -70,6 +70,8 @@ def main():
         print("Running DynamicStateModel v2: delta-t conditioned leakage-free LODO prefix-to-future forecasting...");from dynamics.run_dynamic_state_v2 import run;print(run());return
     if getattr(args,"dynamic_state_memory"):
         print("Running memory-aware DynamicStateModel: Markov vs history-aware LODO prefix-to-future forecasting...");from dynamics.run_dynamic_state_memory import run;print(run());return
+    if getattr(args,"dynamic_state_benchmark"):
+        print("Running unified DynamicStateModel benchmark: PCA vs autoencoder vs Markov vs delta-t vs memory...");from dynamics.run_model_benchmark import run;print(run());return
     if args.stage210:
         print("Running Stage 2.10 leakage-free conserved biological transition module validation; no ODE/state-space model...");from dynamics.stage210 import run;print(f"Stage 2.10 result: {run()}");return
     if args.stage28:
@@ -88,57 +90,6 @@ def main():
         from dynamics.stage295 import run;print(f"Stage 2.9.5 result: {run()}");return
     if args.stage296:
         from dynamics.stage296 import run;print(f"Stage 2.9.6 result: {run()}");return
-    if args.stage297:
-        from dynamics.stage297 import run;print(f"Stage 2.9.7 result: {run()}");return
-    if args.stage298:
-        from dynamics.stage298 import run;print(f"Stage 2.9.8 result: {run()}");return
-    if args.stage299:
-        from dynamics.stage299 import run;print(f"Stage 2.9.9 result: {run()}");return
-    if args.stage2910:
-        from dynamics.stage2910 import run;print(f"Stage 2.9.10 result: {run()}");return
-    if args.stage2911:
-        from dynamics.stage2911 import run;print(f"Stage 2.9.11 result: {run()}");return
-    if args.stage2912:
-        from dynamics.stage2912 import run;print(f"Stage 2.9.12 result: {run()}");return
-    if args.stage2913:
-        from dynamics.stage2913 import run;print(f"Stage 2.9.13 result: {run()}");return
-    if args.stage2914:
-        from dynamics.stage2914 import run;print(f"Stage 2.9.14 result: {run()}");return
-    if args.stage2915:
-        from dynamics.stage2915 import run;print(f"Stage 2.9.15 result: {run()}");return
-    if args.stage2916:
-        from dynamics.stage2916 import run;print(f"Stage 2.9.16 result: {run()}");return
-    if args.stage2917:
-        from dynamics.stage2917 import run;print(f"Stage 2.9.17 result: {run()}");return
-    if args.stage2918:
-        from dynamics.stage2918 import run;print(f"Stage 2.9.18 result: {run()}");return
-    if args.stage2919:
-        from dynamics.stage2919 import run;print(f"Stage 2.9.19 result: {run()}");return
-    if args.stage2920:
-        from dynamics.stage2920 import run;print(f"Stage 2.9.20 result: {run()}");return
-    if args.stage2921:
-        from dynamics.stage2921 import run;print(f"Stage 2.9.21 result: {run()}");return
-    if args.stage2922:
-        from dynamics.stage2922 import run;print(f"Stage 2.9.22 result: {run()}");return
-    if args.stage2923:
-        from dynamics.stage2923 import run;print(f"Stage 2.9.23 result: {run()}");return
-    if args.stage2924:
-        from dynamics.stage2924 import run;print(f"Stage 2.9.24 result: {run()}");return
-    if args.stage2925:
-        from dynamics.stage2925 import run;print(f"Stage 2.9.25 result: {run()}");return
-    if args.stage2926:
-        from dynamics.stage2926 import run;print(f"Stage 2.9.26 result: {run()}");return
-    if args.stage2927:
-        from dynamics.stage2927 import run;print(f"Stage 2.9.27 result: {run()}");return
-    if args.stage2928:
-        from dynamics.stage2928 import run;print(f"Stage 2.9.28 result: {run()}");return
-    if args.stage2929:
-        from dynamics.stage2929 import run;print(f"Stage 2.9.29 result: {run()}");return
-    if args.stage2930:
-        from dynamics.stage2930 import run;print(f"Stage 2.9.30 result: {run()}");return
-    if args.stage2931:
-        from dynamics.stage2931 import run;print(f"Stage 2.9.31 result: {run()}");return
-    if args.stage2932:
-        from dynamics.stage2932 import run;print(f"Stage 2.9.32 result: {run()}");return
-    _recover_legacy_metadata();_write_dataset_roles();summary=stage2_7();print(summary.to_string(index=False))
-if __name__=="__main__":main()
+    return
+
+if __name__=="__main__": main()
