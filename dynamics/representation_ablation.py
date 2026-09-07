@@ -74,10 +74,12 @@ def _score_network(data, net):
 
 def _get_prior_knowledge():
     import decoupler as dc
-    # decoupler >= 2.x expects a numeric top fraction for PROGENy.
-    # Use all available interactions with a large positive fraction.
+    # decoupler >= 2.x expects a numeric top value for PROGENy.
+    # Use the largest practical interaction set returned by the installed API.
     progeny = dc.op.progeny(organism="human", top=100)
-    dorothea = dc.op.dorothea(organism="human", confidence=["A", "B", "C"])
+    # Current decoupler API calls the DoRothEA confidence filter `levels`.
+    # A is the highest-confidence tier; A-C gives a high-confidence network.
+    dorothea = dc.op.dorothea(organism="human", levels=["A", "B", "C"])
     return progeny, dorothea
 
 
