@@ -1,8 +1,4 @@
-"""Training utilities for the central dynamic state model.
-
-This is intentionally a scaffold: data loading and experiment-specific batching stay
-outside this module so that leakage-free train/validation/test splits remain explicit.
-"""
+"""Training utilities for the central dynamic state model."""
 
 from __future__ import annotations
 
@@ -18,24 +14,20 @@ from .losses import total_loss
 
 @dataclass
 class TrainConfig:
-    epochs: int = 100
+    epochs: int = 200
     learning_rate: float = 1e-3
     reconstruction_weight: float = 1.0
-    prediction_weight: float = 1.0
+    prediction_weight: float = 0.25
+    future_weight: float = 1.0
     grad_clip: Optional[float] = 1.0
 
 
-def train_epoch(
-    model: DynamicStateModel,
-    batches: Iterable[dict[str, torch.Tensor]],
-    optimizer: torch.optim.Optimizer,
-    config: TrainConfig,
-) -> float:
-    """Run one training epoch over pre-split batches.
+def train_epoch(model: DynamicStateModel, batches: Iterable[dict[str, torch.Tensor]],
+                optimizer: torch.optim.Optimizer, config: TrainConfig) -> float:
+    """Run one epoch over already split batches.
 
-    Expected batch keys are ``x_t`` and ``x_next``. Optional keys are ``context``,
-    ``history`` and ``mask``. Splitting, normalization and imputation must happen
-    before this function using training data only.
+    Normalization, imputation, feature selection and train/test splitting must be
+    performed before this function using training data only.
     """
     model.train()
     losses = []
@@ -44,19 +36,15 @@ def train_epoch(
         z_t = model.encode(batch["x_t"])
         z_next = model.encode(batch["x_next"]).detach()
         reconstruction = model.decode(z_t)
-        predicted = model.transition(
-            z_t,
-            context=batch.get("context"),
-            history=batch.get("history"),
-        )
+        predicted = model.transition(z_t, context=batch.get("context"), history=batch.get("history"))
+        predicted_observation = model.decode(predicted)
         loss = total_loss(
-            reconstruction,
-            batch["x_t"],
-            predicted,
-            z_next,
+            reconstruction, batch["x_t"], predicted, z_next,
+            predicted_observation=predicted_observation,
+            next_observation=batch["x_next"],
             reconstruction_weight=config.reconstruction_weight,
             prediction_weight=config.prediction_weight,
-            mask=batch.get("mask"),
+            future_weight=config.future_weight,
         )
         loss.backward()
         if config.grad_clip is not None:
@@ -66,12 +54,9 @@ def train_epoch(
     return sum(losses) / max(len(losses), 1)
 
 
-def build_model(input_dim: int, state_dim: int = 16, hidden_dim: int = 128, context_dim: int = 0, history_dim: int = 0) -> DynamicStateModel:
-    """Construct the default research model."""
+def build_model(input_dim: int, state_dim: int = 16, hidden_dim: int = 128,
+                context_dim: int = 0, history_dim: int = 0) -> DynamicStateModel:
     return DynamicStateModel(
-        input_dim=input_dim,
-        state_dim=state_dim,
-        hidden_dim=hidden_dim,
-        context_dim=context_dim,
-        history_dim=history_dim,
+        input_dim=input_dim, state_dim=state_dim, hidden_dim=hidden_dim,
+        context_dim=context_dim, history_dim=history_dim,
     )
