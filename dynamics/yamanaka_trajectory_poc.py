@@ -122,9 +122,22 @@ def _convert_rds(ds: str, rds: Path, tmp: Path) -> tuple[pd.DataFrame, pd.DataFr
     _write_r_helper(helper)
     out_csv = tmp / f"{ds}.csv"
     cmd = [rscript, str(helper), str(rds), str(out_csv)]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    # R packages may emit locale-specific text on Windows. Decode explicitly
+    # and tolerate one malformed byte so the real R error is still reported.
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     if proc.returncode != 0:
-        raise RuntimeError(f"RDS extraction failed for {ds}: {proc.stderr.strip() or proc.stdout.strip()}")
+        stderr = (proc.stderr or "").strip()
+        stdout = (proc.stdout or "").strip()
+        detail = stderr or stdout or f"Rscript exited with code {proc.returncode}"
+        raise RuntimeError(f"RDS extraction failed for {ds}: {detail}")
+    if not out_csv.exists():
+        raise RuntimeError(f"RDS extraction produced no output CSV for {ds}")
     X = pd.read_csv(out_csv, index_col=0)
     meta = pd.read_csv(str(out_csv) + ".meta.csv")
     X.index = X.index.astype(str).str.upper().str.replace(r"\\.\\d+$", "", regex=True)
