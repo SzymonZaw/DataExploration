@@ -45,14 +45,15 @@ def fold(held,train_names,traj):
  if len(common)<3:return None,None
  consensus={p:float(np.mean([train_times[d][p] for d in train_names])) for p in common}; hA=activity(resample(ht,hX,fill),hgenes,fill); common=[p for p in common if p in hA]
  if len(common)<3:return None,None
- held={p:transition(hA[p])[0] for p in common}; a=np.array([consensus[p] for p in common]); b=np.array([held[p] for p in common]); pairs=[]
+ held_times={p:transition(hA[p])[0] for p in common}; a=np.array([consensus[p] for p in common]); b=np.array([held_times[p] for p in common]); pairs=[]
  for i in range(len(common)):
   for j in range(i+1,len(common)):
    if a[i]!=a[j] and b[i]!=b[j]: pairs.append(np.sign(a[i]-a[j])==np.sign(b[i]-b[j]))
  row={"heldout_dataset":held,"n_training_datasets":len(train_names),"n_common_programs":len(common),"transition_rank_spearman":spearman(a,b),"transition_time_pearson":float(pd.Series(a).corr(pd.Series(b))) if np.std(a)>1e-12 and np.std(b)>1e-12 else np.nan,"pairwise_ordering_agreement":float(np.mean(pairs)) if pairs else np.nan}
- detail=pd.DataFrame({"heldout_dataset":held,"program_id":common,"train_consensus_transition_time":a,"heldout_transition_time":b,"train_consensus_rank":pd.Series(a).rank(method="average").to_numpy(),"heldout_rank":pd.Series(b).rank(method="average").to_numpy()}); return row,detail
+ detail=pd.DataFrame({"heldout_dataset":[held]*len(common),"program_id":common,"train_consensus_transition_time":a,"heldout_transition_time":b,"train_consensus_rank":pd.Series(a).rank(method="average").to_numpy(),"heldout_rank":pd.Series(b).rank(method="average").to_numpy()})
+ return row,detail
 def bootstrap(held,train_names,traj):
- train={d:traj[d] for d in train_names}; ht,hX,hgenes=traj[held]; fill=train_fill(train); Y=resample(ht,hX,fill); pos={g:i for i,g in enumerate(hgenes)}; rng=np.random.default_rng(210000+sum(map(ord,held))); rows=[]
+ ht,hX,hgenes=traj[held]; fill=train_fill({d:traj[d] for d in train_names}); Y=resample(ht,hX,fill); pos={g:i for i,g in enumerate(hgenes)}; rng=np.random.default_rng(210000+sum(map(ord,held))); rows=[]
  for k in range(N_BOOT):
   times={}
   for pid,members in PROGRAMS.items():
