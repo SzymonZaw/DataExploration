@@ -71,33 +71,56 @@ if (inherits(obj, "Seurat")) {
   stop("Unsupported RDS class: ", paste(class(obj), collapse=","))
 }
 
-# Find a day/time column conservatively. The GEO dataset is expected to encode
-# day 0/3/7/10 in metadata; no times are invented if parsing fails.
-find_col <- function(nms) {
-  low <- tolower(nms)
-  priority <- c("day", "time", "hour", "dox", "oskm")
-  for (token in priority) {
-    hits <- which(grepl(token, low))
-    if (length(hits)) return(nms[hits[1]])
-  }
-  hits <- which(grepl("condition", low))
-  if (length(hits)) return(nms[hits[1]])
-  NA_character_
-}
-time_col <- find_col(colnames(meta))
-if (is.na(time_col)) stop("Could not identify a time/day metadata column")
-
-time_raw <- as.character(meta[[time_col]])
+# Find a day/time variable conservatively. GEO/Seurat objects do not always
+# use a column literally named day/time; sample identifiers such as
+# "..._D3" or "day7" are common. Therefore we score every metadata column
+# by how consistently its values contain one of the expected days.
 extract_day <- function(x) {
-  m <- regmatches(x, regexpr("(^|[^0-9])([0-9]{1,2})([^0-9]|$)", x, perl=TRUE))
+  x <- as.character(x)
+  m <- regmatches(x, regexpr("(^|[^0-9])([0-9]{1,3})([^0-9]|$)", x, perl=TRUE))
   if (!length(m) || !nzchar(m)) return(NA_real_)
-  z <- sub("^[^0-9]*([0-9]{1,2}).*$", "\\1", m)
+  z <- sub("^[^0-9]*([0-9]{1,3}).*$", "\\1", m)
   d <- suppressWarnings(as.numeric(z))
   if (d %in% c(0,3,7,10)) return(d)
   NA_real_
 }
-day <- vapply(time_raw, extract_day, numeric(1))
-if (all(is.na(day))) stop("No day 0/3/7/10 values could be parsed from ", time_col)
+
+score_time_column <- function(nm) {
+  vals <- meta[[nm]]
+  if (is.factor(vals)) vals <- as.character(vals)
+  vals <- as.character(vals)
+  if (!length(vals)) return(list(score=-Inf, day=rep(NA_real_, length(vals)), column=nm))
+  parsed <- vapply(vals, extract_day, numeric(1))
+  coverage <- mean(!is.na(parsed))
+  unique_days <- length(unique(parsed[!is.na(parsed)]))
+  if (coverage < 0.50 || unique_days < 2) {
+    return(list(score=-Inf, day=parsed, column=nm))
+  }
+  low <- tolower(nm)
+  name_bonus <- if (grepl("day|time|hour|dox|oskm|ident|sample|condition|group", low)) 0.25 else 0
+  score <- coverage + min(unique_days, 4) * 0.05 + name_bonus
+  list(score=score, day=parsed, column=nm)
+}
+
+candidates <- lapply(colnames(meta), score_time_column)
+scores <- vapply(candidates, function(x) x$score, numeric(1))
+if (all(!is.finite(scores))) {
+  # Write a compact metadata diagnostic next to the expected output so a
+  # future dataset-specific failure is immediately inspectable.
+  diag <- data.frame(
+    column=colnames(meta),
+    class=vapply(meta, function(x) class(x)[1], character(1)),
+    n_unique=vapply(meta, function(x) length(unique(x)), integer(1)),
+    example=vapply(meta, function(x) paste(head(unique(as.character(x)), 5), collapse=" || "), character(1)),
+    stringsAsFactors=FALSE
+  )
+  write.csv(diag, paste0(outfile, ".metadata_diagnostic.csv"), row.names=FALSE, quote=TRUE)
+  stop("Could not identify a metadata column encoding at least two of day 0/3/7/10")
+}
+
+best <- candidates[[which.max(scores)]]
+time_col <- best$column
+day <- best$day
 
 # Pseudobulk within each unique metadata condition/time group. For this POC we
 # preserve donor/cell-source columns where available to keep groups separable.
