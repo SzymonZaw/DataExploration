@@ -80,20 +80,18 @@ Does correct temporal ordering contain information beyond the same observations 
 
 ### Construction
 
-For each dataset, permute time labels **within the valid sample/group structure** while preserving the expression/activity values. Recompute the complete temporal-distance-profile statistic for every valid permutation.
+For each dataset, permute the ordering of the four valid day labels while preserving the activity values. The observed statistic is calculated once using the prespecified real ordering.
 
-The observed statistic must be calculated once using the prespecified real time labels.
-
-Use an exact permutation test where the number of distinct permutations is small; otherwise use a prespecified Monte Carlo sample of **10,000 permutations** with a fixed random seed recorded in the output.
+Because the primary Yamanaka trajectory has exactly four unique days, there are only **24 exact orderings**. The observed ordering is excluded from the null reference, leaving **23 null permutations**. No Monte Carlo approximation is used for this four-day case.
 
 ### Decision rule
 
 The observed statistic passes Null 1 only if:
 
-- it lies above the **99th percentile** of the temporal-order null distribution, and
-- the empirical two-sided permutation p-value is **< 0.01**.
+- it lies above the **99th percentile** of the absolute-value temporal-order null distribution, and
+- the +1-corrected empirical two-sided permutation p-value is **≤ 0.05**.
 
-If fewer than 100 valid permutations are possible, report the exact attainable p-value and do not claim a 0.01 threshold that cannot be resolved by the permutation space.
+With 23 null permutations, the minimum attainable +1-corrected empirical p-value is **1/24 ≈ 0.0417**. Therefore a 0.01 threshold is not statistically resolvable for this design and is not used.
 
 ### Interpretation
 
