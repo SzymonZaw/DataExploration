@@ -1,4 +1,4 @@
-"""Loss functions for DynamicStateModel experiments."""
+"""Loss functions for dynamic state learning."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import torch.nn.functional as F
 
 
 def masked_mse(pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-    """Mean squared error while ignoring missing observations when a mask is given."""
     if pred.shape != target.shape:
         raise ValueError(f"shape mismatch: {pred.shape} != {target.shape}")
     loss = (pred - target) ** 2
@@ -18,33 +17,37 @@ def masked_mse(pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Te
     mask = mask.to(dtype=loss.dtype)
     if mask.shape != loss.shape:
         mask = mask.expand_as(loss)
-    denom = mask.sum().clamp_min(1.0)
-    return (loss * mask).sum() / denom
+    return (loss * mask).sum() / mask.sum().clamp_min(1.0)
 
 
 def state_prediction_loss(predicted_state: torch.Tensor, target_state: torch.Tensor) -> torch.Tensor:
-    """Loss for one-step latent-state prediction."""
     return F.mse_loss(predicted_state, target_state)
 
 
-def reconstruction_loss(reconstruction: torch.Tensor, observation: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-    """Observation reconstruction loss."""
+def reconstruction_loss(reconstruction: torch.Tensor, observation: torch.Tensor,
+                        mask: Optional[torch.Tensor] = None) -> torch.Tensor:
     return masked_mse(reconstruction, observation, mask)
 
 
-def total_loss(
-    reconstruction: Optional[torch.Tensor],
-    observation: torch.Tensor,
-    predicted_state: torch.Tensor,
-    target_state: torch.Tensor,
-    reconstruction_weight: float = 1.0,
-    prediction_weight: float = 1.0,
-    mask: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    """Combine reconstruction and temporal prediction objectives."""
-    if reconstruction_weight < 0 or prediction_weight < 0:
+def future_observation_loss(predicted_observation: torch.Tensor, next_observation: torch.Tensor,
+                            mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Require predicted latent state to retain information about the future."""
+    return masked_mse(predicted_observation, next_observation, mask)
+
+
+def total_loss(reconstruction: Optional[torch.Tensor], observation: torch.Tensor,
+               predicted_state: torch.Tensor, target_state: torch.Tensor,
+               predicted_observation: Optional[torch.Tensor] = None,
+               next_observation: Optional[torch.Tensor] = None,
+               reconstruction_weight: float = 1.0,
+               prediction_weight: float = 1.0,
+               future_weight: float = 1.0,
+               mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    if min(reconstruction_weight, prediction_weight, future_weight) < 0:
         raise ValueError("loss weights must be non-negative")
     loss = prediction_weight * state_prediction_loss(predicted_state, target_state)
     if reconstruction is not None:
         loss = loss + reconstruction_weight * reconstruction_loss(reconstruction, observation, mask)
+    if predicted_observation is not None and next_observation is not None:
+        loss = loss + future_weight * future_observation_loss(predicted_observation, next_observation, mask)
     return loss
