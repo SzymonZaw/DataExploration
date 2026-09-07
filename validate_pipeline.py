@@ -48,8 +48,8 @@ def _write_dataset_roles():
     out=pd.DataFrame(rows);out.to_csv(ROOT/"results/Dynamics/stage2_7/00_dataset_roles.csv",index=False);print("\nStage 2.7 dataset roles:");print(out.to_string(index=False));return out
 
 def _parse_args():
-    p=argparse.ArgumentParser(description="Run DataExploration validation stages.")
-    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914","stage2915","stage2916","stage2917","stage2918","stage2919","stage2920","stage2921","stage2922","stage2923","stage2924","stage2925","stage2926","stage2927","stage2928","stage2929","stage2930","stage2931","stage2932","stage210"):p.add_argument(f"--{name}",action="store_true")
+    p=argparse.ArgumentParser(description="Run DataExploration validation and model experiments.")
+    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914","stage2915","stage2916","stage2917","stage2918","stage2919","stage2920","stage2921","stage2922","stage2923","stage2924","stage2925","stage2926","stage2927","stage2928","stage2929","stage2930","stage2931","stage2932","stage210","dynamic-state-model"):p.add_argument(f"--{name}",action="store_true")
     return p.parse_args()
 
 def _require_common_space():
@@ -64,6 +64,11 @@ def main():
             if not (COMMON_MATRIX.exists() and COMMON_METADATA.exists()):raise RuntimeError("Stage 2.6 did not produce a sufficient common gene space and no previous valid files exist.")
             print("WARNING: new Stage 2.6 mapping is insufficient; keeping the last valid common-space files.")
     _require_common_space()
+    if getattr(args,"dynamic_state_model"):
+        print("Running central DynamicStateModel: leakage-free leave-one-dataset-out prediction...")
+        from dynamics.run_dynamic_state_lodo import run
+        print(run())
+        return
     if args.stage210:
         print("Running Stage 2.10 leakage-free conserved biological transition module validation; no ODE/state-space model...")
         from dynamics.stage210 import run;print(f"Stage 2.10 result: {run()}");return
@@ -84,82 +89,56 @@ def main():
     if args.stage296:
         from dynamics.stage296 import run;print(f"Stage 2.9.6 result: {run()}");return
     if args.stage297:
-        print("Using existing Stage 2.6/2.9.6 outputs. Skipping Stage 2.6 through Stage 2.9.6.\n\nRunning Stage 2.9.7 biologically anchored consensus-state validation...")
         from dynamics.stage297 import run;print(f"Stage 2.9.7 result: {run()}");return
     if args.stage298:
-        print("Using existing Stage 2.6/2.9.6 outputs. Skipping Stage 2.6 through Stage 2.9.7.\n\nRunning Stage 2.9.8 biological annotation of consensus genes...")
         from dynamics.stage298 import run;print(f"Stage 2.9.8 result: {run()}");return
     if args.stage299:
-        print("Using existing Stage 2.6/2.9.8 outputs. Skipping Stage 2.6 through Stage 2.9.8.\n\nRunning Stage 2.9.9 biologically anchored program-state construction and exploratory LODO...")
         from dynamics.stage299 import run;print(f"Stage 2.9.9 result: {run()}");return
     if args.stage2910:
-        print("Using existing Stage 2.9.1 fold discoveries; running leakage-free Stage 2.9.10 program discovery/enrichment...")
         from dynamics.stage2910 import run;print(f"Stage 2.9.10 result: {run()}");return
     if args.stage2911:
-        print("Using existing Stage 2.9.10 enrichment caches; running Stage 2.9.11 instability diagnostics...")
         from dynamics.stage2911 import run;print(f"Stage 2.9.11 result: {run()}");return
     if args.stage2912:
-        print("Using existing Stage 2.9.1 fold discoveries; running Stage 2.9.12 gene-selection sensitivity diagnostics...")
         from dynamics.stage2912 import run;print(f"Stage 2.9.12 result: {run()}");return
     if args.stage2913:
-        print("Using existing Stage 2.9.1 fold discoveries; running Stage 2.9.13 enrichment bootstrap stability diagnostics...")
         from dynamics.stage2913 import run;print(f"Stage 2.9.13 result: {run()}");return
     if args.stage2914:
-        print("Running Stage 2.9.14 fixed, biologically anchored program-state validation; no ODE/state-space model...")
         from dynamics.stage2914 import run;print(f"Stage 2.9.14 result: {run()}");return
     if args.stage2915:
-        print("Running Stage 2.9.15 pre-Stage-3 readiness gate; no ODE/state-space model...")
         from dynamics.stage2915 import run;print(f"Stage 2.9.15 result: {run()}");return
     if args.stage2916:
-        print("Running Stage 2.9.16 residual biological-state analysis; no ODE/state-space model...")
         from dynamics.stage2916 import run;print(f"Stage 2.9.16 result: {run()}");return
     if args.stage2917:
-        print("Running Stage 2.9.17 program transition/lead-lag diagnostics; no ODE/state-space model...")
         from dynamics.stage2917 import run;print(f"Stage 2.9.17 result: {run()}");return
     if args.stage2918:
-        print("Running Stage 2.9.18 rigorous lead/lag null validation; no ODE/state-space model...")
         from dynamics.stage2918 import run;print(f"Stage 2.9.18 result: {run()}");return
     if args.stage2919:
-        print("Running Stage 2.9.19 common-state harmonization diagnostics for GSE67462/GSE28688/GSE297234; no ODE/state-space model...")
         from dynamics.stage2919 import run;print(f"Stage 2.9.19 result: {run()}");return
     if args.stage2920:
-        print("Running Stage 2.9.20 controlled common-state repair diagnostics; no ODE/state-space model...")
         from dynamics.stage2920 import run;print(f"Stage 2.9.20 result: {run()}");return
     if args.stage2921:
-        print("Running Stage 2.9.21 leakage-free common-state repair validation; no ODE/state-space model...")
         from dynamics.stage2921 import run;print(f"Stage 2.9.21 result: {run()}");return
     if args.stage2922:
-        print("Running Stage 2.9.22 leakage-free predictive-state validation; no ODE/state-space model...")
         from dynamics.stage2922 import run;print(f"Stage 2.9.22 result: {run()}");return
     if args.stage2923:
-        print("Running Stage 2.9.23 leakage-free one-step-ahead predictive-state validation; no ODE/state-space model...")
         from dynamics.stage2923 import run;print(f"Stage 2.9.23 result: {run()}");return
     if args.stage2924:
-        print("Running Stage 2.9.24 leakage-free delta-t-aware one-step state dynamics; no ODE/state-space model...")
         from dynamics.stage2924 import run;print(f"Stage 2.9.24 result: {run()}");return
     if args.stage2925:
-        print("Running Stage 2.9.25 leakage-free state identifiability / Markov sufficiency validation; no ODE/state-space model...")
         from dynamics.stage2925 import run;print(f"Stage 2.9.25 result: {run()}");return
     if args.stage2926:
-        print("Running Stage 2.9.26 leakage-free multivariate biological state validation; no ODE/state-space model...")
         from dynamics.stage2926 import run;print(f"Stage 2.9.26 result: {run()}");return
     if args.stage2927:
-        print("Running Stage 2.9.27 leakage-free invariant biological coordinate discovery; no ODE/state-space model...")
         from dynamics.stage2927 import run;print(f"Stage 2.9.27 result: {run()}");return
     if args.stage2928:
-        print("Running Stage 2.9.28 leakage-free shared temporal biological component discovery; no ODE/state-space model...")
         from dynamics.stage2928 import run;print(f"Stage 2.9.28 result: {run()}");return
     if args.stage2929:
-        print("Running Stage 2.9.29 trajectory family discovery; no ODE/state-space model...")
         from dynamics.stage2929 import run;print(f"Stage 2.9.29 result: {run()}");return
     if args.stage2930:
-        print("Running Stage 2.9.30 leakage-free time-warped shared trajectory validation; no ODE/state-space model...")
         from dynamics.stage2930 import run;print(f"Stage 2.9.30 result: {run()}");return
     if args.stage2931:
-        print("Running Stage 2.9.31 leakage-free shared + dataset-specific dynamics validation; no ODE/state-space model...")
         from dynamics.stage2931 import run;print(f"Stage 2.9.31 result: {run()}");return
     if args.stage2932:
-        print("Running Stage 2.9.32 leakage-free shared-vs-dataset decomposition with biological invariance tests; no ODE/state-space model...")
         from dynamics.stage2932 import run;print(f"Stage 2.9.32 result: {run()}");return
     _recover_legacy_metadata();_write_dataset_roles();summary=stage2_7();print(summary.to_string(index=False))
 
