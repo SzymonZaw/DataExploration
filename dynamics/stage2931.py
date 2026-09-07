@@ -1,7 +1,7 @@
 """Stage 2.9.31: shared vs dataset-specific dynamics.
 
 Tests whether a common temporal component plus a dataset-specific residual
-predicts a held-out trajectory better than persistence or shared-only models.
+predicts a held-out trajectory better than persistence or shared-only.
 This is a predictive representation diagnostic, not an ODE/state-space model.
 """
 from pathlib import Path
@@ -116,13 +116,12 @@ def fit_shared_model(train, all_genes):
     return genes, idx, pca, shared_pc
 
 
-def fit_residual_extrapolation(prefix_t, residual):
-    """Fit residual(t)=a+b*t and extrapolate to normalized t=1."""
-    t = normalize_time(prefix_t)
+def fit_residual_extrapolation(residual):
+    """Fit residual on the normalized training grid and extrapolate to grid=1."""
     residual = np.asarray(residual, float)
-    if len(t) < 3:
+    if residual.shape[0] < 3:
         return np.full(residual.shape[1], np.nan), np.nan
-    design = np.column_stack([np.ones(len(t)), t])
+    design = np.column_stack([np.ones(len(GRID)), GRID])
     coef = np.linalg.lstsq(design, residual, rcond=None)[0]
     pred = coef[0] + coef[1]
     return pred, float(np.mean(np.abs(coef[1])))
@@ -142,7 +141,8 @@ def prepare_fold(heldout, train_names, traj):
         return None
     genes, idx, pca, shared = fit_shared_model(train, all_genes)
 
-    # Strict held-out normalization uses only the observed prefix.
+    # Held-out normalization uses only the observed prefix. Both prefix and
+    # shared trajectory live on the same normalized 40-point grid.
     prefix_raw = resample(t[:-1], X[:-1, idx])
     prefix_state, baseline, amp = normalize_with_stats(prefix_raw)
     full_raw = resample(t, X[:, idx])
@@ -150,20 +150,16 @@ def prepare_fold(heldout, train_names, traj):
 
     prefix_pc = pca.transform(prefix_state)
     true_pc = pca.transform(full_state)[-1]
-    shared_prefix = shared[np.searchsorted(GRID, normalize_time(t[:-1]), side="left").clip(0, len(GRID)-1)]
-    # Use interpolation rather than nearest-grid lookup for observed prefix times.
-    shared_prefix = np.column_stack([
-        np.interp(normalize_time(t[:-1]), GRID, shared[:, j])
-        for j in range(shared.shape[1])
-    ])
-    shared_final = shared[-1]
-    residual_prefix = prefix_pc - shared_prefix
-    residual_final, slope = fit_residual_extrapolation(t[:-1], residual_prefix)
+
+    # prefix_pc is already sampled on GRID, so subtraction is dimensionally
+    # and temporally aligned with the training-derived shared trajectory.
+    residual_prefix = prefix_pc - shared
+    residual_final, slope = fit_residual_extrapolation(residual_prefix)
     if not np.all(np.isfinite(residual_final)):
         return None
 
-    pred_full = shared_final + residual_final
-    pred_shared = shared_final
+    pred_full = shared[-1] + residual_final
+    pred_shared = shared[-1]
     persistence = prefix_pc[-1]
 
     # Nearest-time baseline: shared state at the last observed normalized time.
@@ -179,7 +175,8 @@ def prepare_fold(heldout, train_names, traj):
         "n_pc": shared.shape[1],
         "prefix_pc": prefix_pc,
         "true_pc": true_pc,
-        "shared_final": shared_final,
+        "shared_final": shared[-1],
+        "shared_template": shared,
         "pred_full": pred_full,
         "pred_shared": pred_shared,
         "persistence": persistence,
@@ -217,31 +214,25 @@ def permutation_null(artifacts, names):
     for p in range(N_PERM):
         vals = []
         for di, ds in enumerate(names):
+            if ds not in artifacts:
+                continue
             a = artifacts[ds]
             rng = np.random.default_rng(931000 + p * len(names) + di)
             perm = a["prefix_pc"][rng.permutation(len(a["prefix_pc"]))]
-            # Preserve the shared component and test whether a residual temporal
-            # structure survives when the held-out prefix order is destroyed.
-            true = a["true_pc"]
-            n = len(perm)
-            q = np.linspace(0.0, 1.0, n)
-            shared_prefix = np.column_stack([
-                np.interp(q, GRID, a["shared_final"] * 0 + np.linspace(0, 1, len(GRID)) * 0 + 0)
-                for _ in range(a["prefix_pc"].shape[1])
-            ])
-            # Reconstruct the chronological shared prefix from the fold's
-            # template stored below when available.
             template = a["shared_template"]
-            shared_prefix = np.column_stack([
-                np.interp(q, GRID, template[:, j]) for j in range(template.shape[1])
-            ])
-            residual = perm - shared_prefix
-            pred_resid, _ = fit_residual_extrapolation(np.linspace(0, 1, n), residual)
+            residual = perm - template
+            pred_resid, _ = fit_residual_extrapolation(residual)
+            if not np.all(np.isfinite(pred_resid)):
+                continue
             pred = a["shared_final"] + pred_resid
+            true = a["true_pc"]
             rmse = float(np.sqrt(np.mean((pred - true) ** 2)))
             persistence = float(np.sqrt(np.mean((a["persistence"] - true) ** 2)))
             vals.append(persistence - rmse)
-        rows.append({"permutation": p + 1, "mean_improvement_vs_persistence": float(np.mean(vals))})
+        rows.append({
+            "permutation": p + 1,
+            "mean_improvement_vs_persistence": float(np.mean(vals)) if vals else np.nan,
+        })
     return pd.DataFrame(rows)
 
 
@@ -258,10 +249,6 @@ def run():
         log(f"LODO held out {heldout}; training on {', '.join(train)}")
         a = prepare_fold(heldout, train, traj)
         if a is not None:
-            # Store the complete shared template for the permutation test.
-            # It is learned from training datasets only.
-            _, _, pca, shared = fit_shared_model({d: traj[d] for d in train}, traj[heldout][2])
-            a["shared_template"] = shared
             artifacts[heldout] = a
             rows.append(evaluate(a))
 
@@ -291,7 +278,7 @@ def run():
         "time_permutation_p": p_value,
         "shared_plus_dataset_predictive_support": bool(obs > 0 and np.isfinite(p_value) and p_value < 0.05),
         "stage3_readiness": False,
-        "interpretation": "Training-only shared temporal component plus held-out dataset-specific residual extrapolation; LODO final-point prediction; permutation null; no ODE/state-space model"
+        "interpretation": "Training-only shared temporal component plus held-out dataset-specific residual extrapolation; LODO final-point prediction; permutation null; no ODE/state-space model",
     }])
     summary.to_csv(OUT / "03_stage2931_summary.csv", index=False)
     log("overall:")
