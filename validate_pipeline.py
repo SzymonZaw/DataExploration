@@ -49,7 +49,7 @@ def _write_dataset_roles():
 
 def _parse_args():
     p=argparse.ArgumentParser(description="Run DataExploration validation and model experiments.")
-    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914","stage2915","stage2916","stage2917","stage2918","stage2919","stage2920","stage2921","stage2922","stage2923","stage2924","stage2925","stage2926","stage2927","stage2928","stage2929","stage2930","stage2931","stage2932","stage210","dynamic-state-model","dynamic-state-model-v2","dynamic-state-memory","dynamic-state-benchmark"):p.add_argument(f"--{name}",action="store_true")
+    for name in ("refresh","stage28","stage29","stage291","stage292","stage293","stage294","stage295","stage296","stage297","stage298","stage299","stage2910","stage2911","stage2912","stage2913","stage2914","stage2915","stage2916","stage2917","stage2918","stage2919","stage2920","stage2921","stage2922","stage2923","stage2924","stage2925","stage2926","stage2927","stage2928","stage2929","stage2930","stage2931","stage2932","stage210","dynamic-state-model","dynamic-state-model-v2","dynamic-state-memory","dynamic-state-benchmark","phase1-representation-ablation"):p.add_argument(f"--{name}",action="store_true")
     return p.parse_args()
 
 def _require_common_space():
@@ -72,6 +72,8 @@ def main():
         print("Running memory-aware DynamicStateModel: Markov vs history-aware LODO prefix-to-future forecasting...");from dynamics.run_dynamic_state_memory import run;print(run());return
     if getattr(args,"dynamic_state_benchmark"):
         print("Running unified DynamicStateModel benchmark: PCA vs autoencoder vs Markov vs delta-t vs memory...");from dynamics.run_model_benchmark import run;print(run());return
+    if getattr(args,"phase1_representation_ablation"):
+        print("Running Phase 1 biological representation ablation: genes vs PROGENy vs DoRothEA...");from dynamics.representation_ablation import run;print(run());return
     if args.stage210:
         print("Running Stage 2.10 leakage-free conserved biological transition module validation; no ODE/state-space model...");from dynamics.stage210 import run;print(f"Stage 2.10 result: {run()}");return
     if args.stage28:
