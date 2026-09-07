@@ -1,562 +1,559 @@
-# Mathematical Modeling and Prediction of Cellular Reprogramming Dynamics
+# AI-driven discovery of dynamical mechanisms of cellular state transitions
 
-## Overview
+## Research project
 
-This repository contains the computational part of a research project focused on reconstructing and predicting the dynamic state of a biological cell from heterogeneous, incomplete and independently generated biological data.
+This repository contains the computational research framework for a PhD project on **discovering and validating dynamical mechanisms of cellular state transitions from heterogeneous biological data**.
 
-The central scientific problem is not the construction of a Digital Biological Twin itself. The primary objective is to determine whether independent multimodal experiments can be integrated into a biologically meaningful state space, whether cellular trajectories can be reconstructed in that space, and whether their dynamics can be modeled and predicted for data that were not used to build the model.
+Cellular reprogramming is the primary biological case study, but the methodological goal is broader: to understand how a biological system moves between states, which components of that transition are conserved across experiments, which depend on context or perturbation, and whether the learned representation can support prediction and mechanistic hypothesis testing.
 
-The Digital Biological Twin is treated as a downstream demonstrator of the resulting methodology.
+The project combines heterogeneous multi-omics data, machine learning and representation learning, biological knowledge and regulatory information, mathematical dynamical systems, perturbation-response modeling, uncertainty-aware prediction, symbolic/model discovery, and AI/LLM-assisted mechanistic reasoning.
 
----
-
-## Proposed PhD topic
-
-> **Mathematical modeling and prediction of cellular reprogramming dynamics based on heterogeneous multimodal biological data.**
-
-An alternative broader formulation is:
-
-> **Reconstruction and prediction of the dynamic cellular state based on heterogeneous multimodal data using machine learning, state-space geometry and dynamical-system modeling.**
-
-The main biological process used as a research case is **OSKM-mediated cellular reprogramming**, including transitions from fibroblast-like states toward pluripotency.
+The **Digital Biological Twin** is a downstream demonstrator of the methodology, not the primary scientific claim.
 
 ---
 
-## Main research question
+## PhD topic
 
-> **Can a reliable dynamic trajectory of cellular state be reconstructed from independent, heterogeneous and incomplete multimodal biological datasets, and can this trajectory be used to predict future cellular states?**
+### Primary formulation
 
-A more ambitious methodological question is:
+> **AI-driven discovery of conserved and context-dependent dynamical mechanisms of cellular reprogramming from heterogeneous multi-omics data.**
 
-> **Can a common biological state space and an interpretable mathematical model of reprogramming dynamics be identified from heterogeneous experiments and generalize to independent datasets?**
+### Broader methodological formulation
+
+> **AI-driven discovery of dynamical mechanisms of cell-state transitions from heterogeneous biological data.**
+
+The second formulation is intentionally broader. It allows cellular reprogramming to remain the main experimental case while making the scientific contribution applicable to other biological state transitions, perturbation responses and cell-fate decisions.
+
+---
+
+## Main scientific problem
+
+Modern biological experiments observe cellular state through different technologies, organisms, laboratories, sampling schedules and perturbations. These datasets are therefore heterogeneous, incomplete and often incompatible at the level of individual measurements.
+
+A central question is whether these observations can be transformed into a **biologically meaningful dynamical representation** in which we can distinguish:
+
+1. conserved components of cellular-state dynamics,
+2. context- and experiment-specific components,
+3. effects of perturbations,
+4. effects of cellular history or memory,
+5. genuine predictive information about future state.
+
+The project therefore does **not** assume that all experiments follow one universal trajectory.
+
+The working dynamical formulation is conceptually:
+
+\[
+x_d(t) = G_d\big(z_d(t),u_d(t),h_d(t)\big)+\epsilon_d(t)
+\]
+
+with
+
+\[
+\frac{dz_d}{dt}=F\big(z_d(t),u_d(t),h_d(t),\theta_d\big).
+\]
+
+Here \(x_d(t)\) is the observed data, \(z_d(t)\) the latent biological state, \(u_d(t)\) the experimental perturbation, \(h_d(t)\) relevant history or memory, \(\theta_d\) context-dependent parameters, and \(F\) the unknown dynamical mechanism.
+
+One of the main scientific goals is to determine **which parts of this model are actually supported by independent data**.
+
+---
+
+## Central research question
+
+> **Can artificial intelligence, biological knowledge and mathematical dynamical modeling be combined to identify a minimal, interpretable state representation and discover mechanisms that predict cellular-state transitions across heterogeneous experiments?**
+
+Secondary questions include:
+
+- What information is conserved between independent experiments?
+- What information is specific to cell type, protocol, perturbation or environment?
+- When is the current cellular state sufficient to predict its future, and when is historical information required?
+- Can early molecular signals identify an approaching state transition before the final phenotype is established?
+- Which genes, regulatory modules or molecular processes are most informative about the future state?
+- Can competing mechanistic hypotheses be generated, quantitatively compared and falsified against independent observations?
+- Can AI identify the most informative perturbation or sampling time for distinguishing competing mechanisms?
 
 ---
 
 ## Main objective
 
-The main objective is to develop and validate a computational methodology for:
+> **To develop and validate an AI-assisted mathematical framework for discovering dynamical mechanisms of cellular-state transitions by integrating heterogeneous biological measurements, biological knowledge and perturbation information, while explicitly modeling uncertainty, context dependence and cellular history.**
 
-1. harmonizing heterogeneous biological measurements,
-2. constructing a biologically meaningful common cellular state space,
-3. reconstructing longitudinal cellular trajectories,
-4. modeling the dynamics of state transitions,
-5. identifying changes in stability and possible transition points,
-6. discovering interpretable mathematical relationships governing the dynamics,
-7. validating predictions on observations and entire datasets excluded from model construction,
-8. representing the resulting state, trajectory, prediction and uncertainty in a Digital Biological Twin.
-
-The key requirement is **generalization**, not merely obtaining a visually convincing trajectory or a low in-sample reconstruction error.
-
----
-
-## Research hypothesis
-
-> **Integration of independent multimodal biological measurements in a biologically defined state space can produce stable and interpretable cellular trajectories and enable prediction of future cellular states, provided that heterogeneity between experiments, uncertainty and missing observations are explicitly modeled.**
-
-A stronger hypothesis to be investigated is:
-
-> **Cellular reprogramming dynamics can be approximated by a low-dimensional, mathematically interpretable dynamical model whose predictive ability can be validated on independent experiments.**
-
-These hypotheses are empirical and must be tested against appropriate baselines and held-out data.
-
----
-
-# Specific research tasks
-
-## Task 1 — Integration and characterization of heterogeneous biological data
-
-Develop a reproducible data-processing framework for datasets representing different biological modalities and experimental designs, including:
-
-- bulk RNA-seq,
-- microarray expression data,
-- single-cell RNA-seq,
-- ChIP-seq / regulatory measurements,
-- longitudinal and time-course experiments.
-
-The methodology must explicitly account for:
-
-- different platforms,
-- different organisms,
-- different measurement resolutions,
-- different sampling times,
-- biological and technical replicates,
-- incomplete observations,
-- experimental perturbations and branches.
-
-**Expected result:** a standardized and traceable representation of the input datasets and their metadata.
-
----
-
-## Task 2 — Construction of a common biological state space
-
-This is the central methodological task.
-
-The current PCA + Procrustes approach is treated as an experimental diagnostic, not as the final biological representation. A proper common state space should be based on biological features that can be meaningfully compared between studies.
-
-Potential components include:
-
-- shared genes,
-- human–mouse orthologs,
-- gene modules and pathways,
-- regulatory features,
-- pseudobulk representations of single-cell data,
-- platform-aware normalization,
-- batch-effect correction,
-- latent-factor models and other dimensionality-reduction methods.
-
-The state of a biological system will be represented as a vector such as:
-
-\[
-z(t) = [z_1(t), z_2(t), \ldots, z_n(t)]
-\]
-
-where the coordinates have a reproducible biological or latent interpretation.
-
-**Expected result:** a common representation that can be tested independently rather than imposed through time alignment alone.
-
----
-
-## Task 3 — Reconstruction of dynamic cellular trajectories
-
-Reconstruct trajectories of cellular state:
-
-\[
-z(t_0) \rightarrow z(t_1) \rightarrow z(t_2) \rightarrow \cdots \rightarrow z(t_n)
-\]
-
-The analysis will quantify:
-
-- direction of state change,
-- rate of change,
-- trajectory length,
-- trajectory similarity,
-- branching,
-- divergence between experimental conditions,
-- stability and variability of replicate measurements.
-
-Special attention will be paid to the distinction between genuine biological trajectories and trajectories introduced by preprocessing or alignment methods.
-
-**Expected result:** quantitative representations of reprogramming trajectories together with uncertainty and replicate variability.
-
----
-
-## Task 4 — Mathematical modeling of cellular-state dynamics
-
-The dynamics may be formulated as a state-space or dynamical-system problem, for example:
-
-\[
-\frac{dz}{dt} = F(z,t,u,\theta)
-\]
-
-where:
-
-- \(z\) is the cellular state,
-- \(t\) is biological time,
-- \(u\) represents experimental perturbations such as OSKM,
-- \(\theta\) represents model parameters,
-- \(F\) describes the state transition dynamics.
-
-Candidate model families may include:
-
-- ordinary differential equations,
-- state-space models,
-- probabilistic dynamical models,
-- Neural ODEs,
-- geometric models of cellular state space,
-- other appropriate machine-learning dynamical models.
-
-The model family should be selected empirically rather than assumed in advance.
-
-**Expected result:** a quantitative model capable of representing cellular-state transitions and producing testable predictions.
-
----
-
-## Task 5 — Identification of state transitions and changes in stability
-
-Investigate whether reprogramming contains mathematically detectable changes in dynamical stability before the appearance of classical pluripotency markers.
-
-Potential indicators include:
-
-- increasing variance,
-- increasing autocorrelation,
-- critical slowing down,
-- changes in local velocity,
-- changes in the Jacobian,
-- local geometric curvature,
-- changes in potential-like landscapes,
-- bifurcation-like behavior.
-
-A key biological question is:
-
-> **Can an approaching transition toward pluripotency be detected before the cell reaches a classical pluripotent state?**
-
-**Expected result:** quantitative indicators of state transitions and their predictive value.
-
----
-
-## Task 6 — Mathematical model discovery and symbolic regression
-
-Once a validated common state representation and reliable trajectories have been obtained, symbolic regression / genetic programming can be used to search for interpretable dynamical relationships.
-
-For example:
-
-\[
-\frac{dz_1}{dt} = f_1(z_1,z_2,\ldots,z_n)
-\]
-
-\[
-\frac{dz_2}{dt} = f_2(z_1,z_2,\ldots,z_n)
-\]
-
-The goal is not simply to maximize predictive accuracy. The analysis should investigate whether relatively simple equations can explain the observed dynamics and generalize beyond the datasets used for model discovery.
-
-Symbolic models will be treated as hypotheses about the system and will require independent validation. They will not automatically be interpreted as causal mechanisms.
-
-**Expected result:** interpretable candidate equations describing aspects of cellular-state dynamics.
-
----
-
-## Task 7 — Out-of-sample and cross-dataset validation
-
-Generalization is a central criterion of the project.
-
-Validation strategies will include:
-
-- leave-one-replicate-out validation,
-- leave-one-timepoint-out validation,
-- leave-one-dataset-out validation,
-- prediction on an entire independent experiment,
-- comparison against naive and conventional baselines.
-
-The fundamental test is:
-
-\[
-D_1 + D_2 + D_3 \rightarrow \text{model}
-\]
-
-followed by:
-
-\[
-\text{model} \rightarrow D_4
-\]
-
-where \(D_4\) was not used during model construction.
-
-A low in-sample alignment or reconstruction error will not be considered sufficient evidence of validity.
-
-**Expected result:** quantitative evidence for, or against, cross-study generalization.
-
----
-
-## Task 8 — Digital Biological Twin demonstrator
-
-The final methodology will be integrated into the existing Digital Biological Twin prototype (`testHP`).
-
-The Twin is intended to demonstrate how the scientific methodology can represent:
-
-```text
-OBSERVED
-    ↓
-MEASURED
-    ↓
-DERIVED
-    ↓
-INFERRED
-    ↓
-PREDICTED STATE
-```
-
-Each inferred or predicted element should be associated with:
-
-- uncertainty,
-- provenance,
-- temporal context,
-- supporting observations,
-- confidence/evidence level.
-
-The Twin therefore serves as an application and demonstrator of the research methodology rather than being the primary scientific contribution.
-
----
-
-# Current computational strategy
-
-The project currently follows this conceptual pipeline:
+The framework should move from observations toward increasingly mechanistic representations:
 
 ```text
 HETEROGENEOUS BIOLOGICAL DATA
-RNA-seq / microarray / scRNA-seq / ChIP-seq / time-course
-                         │
-                         ▼
-              DATA HARMONIZATION
-       genes / orthologs / modules / batches
-                         │
-                         ▼
-             COMMON STATE SPACE
-                       z(t)
-                         │
-                         ▼
-             TRAJECTORY RECONSTRUCTION
-                         │
-                         ▼
-                GEOMETRY + DYNAMICS
-                         │
-                         ▼
-               DYNAMICAL MODEL
-                    dz/dt = F(z)
-                         │
-               ┌─────────┴─────────┐
-               ▼                   ▼
-          PREDICTION         MODEL DISCOVERY
-                               symbolic regression
-               │                   │
-               └─────────┬─────────┘
-                         ▼
-                  OUT-OF-SAMPLE
-                    VALIDATION
-                         │
-                         ▼
-              INDEPENDENT DATASETS
-                         │
-                         ▼
-             DIGITAL BIOLOGICAL TWIN
+            ↓
+   BIOLOGICAL HARMONIZATION
+            ↓
+   AI / KNOWLEDGE-GUIDED
+      REPRESENTATION
+            ↓
+       LATENT STATE z
+            ↓
+     STATE TRANSITIONS
+            ↓
+    DYNAMICAL MODEL F
+            ↓
+  COMPETING MECHANISTIC
+       HYPOTHESES
+            ↓
+ PREDICTION + UNCERTAINTY
+            ↓
+       FALSIFICATION
+            ↓
+ INFORMATIVE PERTURBATION /
+       TIME POINT
+            ↓
+ DIGITAL BIOLOGICAL TWIN
 ```
+
+The Digital Biological Twin represents the final application layer of this chain.
+
+---
+
+# Scientific objectives
+
+## Objective 1 — Construct a biologically meaningful state representation
+
+Develop methods that transform heterogeneous measurements into a representation of cellular state:
+
+\[
+x(t) \rightarrow z(t).
+\]
+
+Potential inputs include bulk RNA-seq, microarray expression, scRNA-seq, ATAC-seq, ChIP-seq/CUT&Tag, histone marks, regulatory features, proteomics and perturbation metadata.
+
+Candidate approaches include latent-factor models, variational models, contrastive learning, foundation-model embeddings, knowledge-guided representation learning, multimodal integration and module/pathway representations.
+
+The representation must be evaluated by **out-of-sample biological prediction**, not only by reconstruction quality or visualization.
+
+---
+
+## Objective 2 — Separate conserved and context-dependent dynamics
+
+Instead of assuming one universal trajectory, investigate a decomposition such as:
+
+\[
+F_d = F_{shared} + F_{context,d}.
+\]
+
+Determine which dynamical features are reproducible across independent experiments, cell types, organisms, protocols, perturbations and measurement modalities.
+
+A central criterion is whether a component learned from some datasets remains informative for a completely held-out dataset.
+
+---
+
+## Objective 3 — Identify conserved biological transition modules
+
+Determine whether small biological modules exhibit reproducible temporal behavior even when global trajectories differ.
+
+Candidate processes include:
+
+- epithelial–mesenchymal transition / mesenchymal–epithelial transition,
+- proliferation and MYC-associated programs,
+- metabolic remodeling,
+- chromatin and enhancer remodeling,
+- pluripotency networks,
+- stress responses,
+- extracellular matrix and adhesion,
+- growth-factor signaling.
+
+Quantify activation onset, peak time, rate of change, ordering, interactions, persistence and reproducibility across experiments.
+
+Biological modules are treated as hypotheses or priors, not as predefined proof of mechanism.
+
+---
+
+## Objective 4 — Model perturbation-dependent dynamics
+
+Extend the state representation from \(z(t)\) to \(z(t,u)\), where \(u\) represents a perturbation such as transcription-factor induction, drug treatment, environmental change or genetic intervention.
+
+The goal is to determine whether AI can predict how perturbation changes the future distribution or trajectory of cellular states.
+
+This provides a bridge between observational trajectory reconstruction and mechanistic experimentation.
+
+---
+
+## Objective 5 — Determine when cellular history matters
+
+Test whether cellular dynamics can be modeled as approximately Markovian:
+
+\[
+z_{t+1}=F(z_t,u_t),
+\]
+
+or whether prediction requires historical information:
+
+\[
+z_{t+1}=F(z_t,z_{t-1},\ldots,u_t).
+\]
+
+Potential sources of memory include chromatin state, epigenetic memory, persistent regulatory programs, metabolic state and previous perturbations.
+
+This creates a mathematically explicit framework for studying when a current-state representation is sufficient and when a state-plus-history representation is necessary.
+
+---
+
+## Objective 6 — Discover and falsify mechanistic models
+
+AI systems will be used to construct **competing mechanistic hypotheses** rather than only a single predictive model.
+
+A hypothesis should be represented as:
+
+```text
+biological evidence
+       ↓
+mechanistic hypothesis
+       ↓
+mathematical representation
+       ↓
+predictions
+       ↓
+uncertainty / counter-evidence
+       ↓
+independent validation
+```
+
+Candidate model classes include ordinary and stochastic differential equations, state-space models, probabilistic dynamical systems, Neural ODEs and related neural dynamical models, optimal-transport models of population-state transitions, and symbolic regression/sparse equation discovery.
+
+LLMs may assist with literature-grounded hypothesis generation, biological interpretation and evidence synthesis, but **LLM output is never treated as biological ground truth**.
+
+---
+
+## Objective 7 — Active selection of informative experiments
+
+A key long-term objective is to move from passive analysis toward **active scientific discovery**.
+
+For competing hypotheses \(H_1,H_2,\ldots,H_k\), an experiment \(e\) can be evaluated by expected information gain:
+
+\[
+e^* = \arg\max_e \operatorname{EIG}(e).
+\]
+
+Candidate experiments may differ in gene/module perturbation, perturbation strength, perturbation timing, measurement modality, sampling time and cell population.
+
+The aim is to answer questions such as:
+
+> **Which gene/module and which time point would most strongly discriminate between two competing mechanisms?**
+
+This creates a direct bridge between computational inference and future wet-lab validation.
+
+---
+
+# AI and LLM role
+
+AI is a methodological component of the project, not an end in itself.
+
+### Machine learning
+
+Used for multimodal representation learning, latent state inference, trajectory reconstruction, perturbation-response prediction, uncertainty estimation and nonlinear dynamical modeling.
+
+### Biological foundation models
+
+Potentially used to provide pretrained representations of genes, cells and molecular states, particularly for single-cell and multimodal data.
+
+### LLMs
+
+Used as a **knowledge and reasoning layer** for literature-grounded biological interpretation, candidate mechanism generation, mapping between genes/pathways/regulatory processes, evidence and counter-evidence extraction, comparison of competing explanations and generation of testable predictions.
+
+The system should be self-critical: a proposed mechanism must produce predictions that can be evaluated against data.
+
+### Mathematical AI
+
+AI-generated hypotheses should ultimately be translated into quantitative models that can be simulated, fitted, compared and falsified.
+
+---
+
+# Methodological principles
+
+## 1. Alignment is not biological validation
+
+Two trajectories can be made geometrically similar without representing the same biological process.
+
+> **Post-alignment similarity is evidence about geometry, not proof of biological equivalence.**
+
+Time warping and trajectory alignment are therefore treated as diagnostic or comparative tools unless they improve independent prediction.
+
+## 2. Time must not define the state by itself
+
+A method must not obtain its apparent biological signal simply because samples measured at similar times were forced to be similar.
+
+## 3. Validation must be leakage-free
+
+Any operation that learns from data — including feature selection, imputation, normalization, dimensionality reduction, module selection or model fitting — must be performed inside the appropriate training fold.
+
+## 4. Independent experiments are the strongest test
+
+The preferred validation hierarchy is:
+
+```text
+replicate holdout
+      ↓
+timepoint holdout
+      ↓
+dataset holdout
+      ↓
+independent experiment
+      ↓
+new perturbation / wet-lab validation
+```
+
+## 5. Prediction must beat meaningful baselines
+
+A model is not considered predictive merely because it correlates with time. It should be compared against persistence, nearest-time observation, linear extrapolation and appropriate conventional/statistical models.
+
+## 6. Statistical significance is not sufficient
+
+A small permutation p-value can coexist with poor predictive performance. Model support therefore requires both statistical evidence and meaningful predictive improvement over appropriate baselines.
+
+## 7. Symbolic equations are hypotheses
+
+An interpretable equation is a candidate mathematical explanation. It does not establish causality without appropriate intervention and validation.
+
+## 8. Uncertainty and provenance are first-class objects
+
+The framework should distinguish:
+
+```text
+OBSERVED
+   ↓
+MEASURED
+   ↓
+DERIVED
+   ↓
+INFERRED
+   ↓
+PREDICTED
+```
+
+Every inferred or predicted quantity should retain uncertainty, provenance and the evidence used to derive it.
+
+---
+
+# Current research program
+
+The repository has deliberately progressed through falsifiable stages. Earlier stages tested whether heterogeneous datasets could be aligned into a common trajectory. Later stages progressively tested whether this apparent structure represented a transferable biological state.
+
+## Stage 2.1–2.2 — trajectory geometry
+
+Initial PCA trajectories and Procrustes alignment were used to investigate whether datasets could be geometrically compared.
+
+These analyses established the usefulness and limitations of trajectory geometry but did not establish biological equivalence.
+
+## Stage 2.4 — leakage-free validation
+
+Leave-one-timepoint-out validation was implemented with PCA and scaling fitted only on training timepoints.
+
+## Stage 2.6 — common human gene space
+
+A cross-dataset gene-level harmonization framework was developed using gene identifiers, orthology and platform annotation. The current common space contains approximately 11,899 genes across five expression datasets.
+
+The resulting representation is treated as a research object to validate, not as an assumed biological truth.
+
+## Stage 2.7–2.9 — increasingly rigorous common-state tests
+
+Multiple analyses tested leave-one-dataset-out prediction, leave-one-replicate-out prediction, permutation nulls, biological program representations, latent progress coordinates, temporal concordance, lagged relationships, dataset-specific effects, shared and context-specific dynamics, predictive state representations, Markov sufficiency, invariant biological coordinates, shared temporal components and trajectory-family structure.
+
+The key conclusion is methodological:
+
+> **The data contain reproducible temporal structure, but current analyses do not support the stronger claim that all experiments share one transferable predictive biological trajectory.**
+
+This motivates the shift from searching for a universal trajectory toward **discovering conserved mechanisms and context-dependent dynamics**.
+
+## Stage 2.10 — conserved transition modules
+
+Stage 2.10 tested whether fixed biological programs exhibited a reproducible ordering of activation across independent datasets.
+
+The latest analysis did **not** support a conserved ordering strongly enough to establish a transferable module sequence.
+
+This motivates the next research direction rather than being treated as a failure of the project.
+
+## Stage 2.11 — perturbation and mechanism discovery
+
+The current development branch is dedicated to moving from trajectory similarity toward **perturbation-dependent mechanism discovery**.
+
+The target workflow is:
+
+```text
+state representation
+       ↓
+perturbation response
+       ↓
+candidate mechanism
+       ↓
+mathematical model
+       ↓
+prediction
+       ↓
+falsification
+```
+
+---
+
+# Biological case study: cellular reprogramming
+
+Cellular reprogramming provides a useful test system because it contains large changes in cellular identity, transient intermediate states, heterogeneous cell responses, transcriptional and epigenetic remodeling, metabolic and proliferative changes, perturbation-dependent trajectories and experimentally accessible time courses.
+
+OSKM-mediated reprogramming is an important historical case in the repository, but the project is intentionally expanding toward other forms of cell-state transition and reprogramming.
+
+Potential mechanisms include:
+
+```text
+somatic identity
+      ↓
+cellular plasticity
+      ↓
+EMT / MET remodeling
+      ↓
+chromatin / enhancer remodeling
+      ↓
+pluripotency network
+      ↓
+stabilized cell state
+```
+
+This is a biological hypothesis, not an assumed causal ordering. The project must determine which relationships are supported by data and which are context-dependent.
 
 ---
 
 # Current datasets
 
-The repository currently contains exploratory pipelines for complementary datasets related to cellular reprogramming and cell-state regulation.
-
-| Dataset | Organism | Modality | Main role |
+| Dataset | Organism | Modality | Role |
 |---|---|---|---|
-| GSE148158 | Human | RNA-seq | Reprogramming / OSKM and GFP controls |
+| GSE148158 | Human | RNA-seq | Reprogramming / OSKM and controls |
 | GSE28688 | Human | Microarray | Early reprogramming time course |
-| GSE52052 | Human | Agilent microarray | Day-11 reprogramming conditions |
-| GSE67462 | Mouse | Affymetrix microarray | Detailed OSKM reprogramming time course |
-| GSE67520 | Mouse | ChIP-seq | Regulatory / chromatin-state information |
+| GSE52052 | Human | Agilent microarray | Reprogramming conditions |
+| GSE67462 | Mouse | Affymetrix microarray | Detailed OSKM time course |
+| GSE67520 | Mouse | ChIP-seq | Regulatory / chromatin information |
 | GSE297234 | Human | scRNA-seq | Single-cell reprogramming trajectories |
 
-The datasets differ substantially in organism, platform, modality, sampling schedule and experimental design. This heterogeneity is not treated as an inconvenience to hide; it is one of the central methodological challenges of the project.
+The dataset collection should expand toward newer longitudinal and perturbational multi-omics experiments. New datasets should be added because they answer a specific scientific question — not simply because they are large or recent.
+
+Priority should be given to datasets providing new information about perturbations, single-cell heterogeneity, chromatin regulation, protein-level state, alternative cell fates, in vivo transitions and independent experimental validation.
 
 ---
 
-# Current computational components
+# Repository structure
 
-## Data exploration
-
-The repository contains dedicated scripts for dataset-level exploratory analysis, including preprocessing, quality control, correlations, variance analysis, PCA and visualization.
-
-Current main scripts include:
-
-- `GSE148158.py`
-- `GSE28688.py`
-- `GSE52052.py`
-- `GSE67462.py`
-- `GSE67520.py`
-- `GSE297234.py`
-- `Summary.py`
-
-## Dynamics analysis
-
-`Dynamics.py` contains the current experimental framework for trajectory reconstruction, common-space diagnostics, validation and subsequent dynamic-analysis stages.
-
-The development has proceeded through several validation stages rather than assuming that a common latent space is valid from the beginning.
-
-### Stage 2.1 — Time-anchored common trajectory geometry
-
-An initial common trajectory representation was constructed from time-aware PCA trajectories using interpolation and Procrustes alignment.
-
-This stage demonstrated that trajectories from some datasets can be geometrically aligned, but it does **not** prove that their coordinates represent the same biological variables.
-
-### Stage 2.2 — Common-space diagnostics
-
-The framework evaluates:
-
-- pairwise trajectory correlation,
-- aligned RMSE,
-- path-length ratios,
-- leave-one-dataset-out comparisons,
-- cross-dataset dispersion,
-- reference sensitivity.
-
-### Stage 2.3 — Within-time residual validation
-
-Stage 2.3 applies transformations to actual sample-level latent points and retains replicate variability.
-
-This exposed an important confounder in GSE148158: GFP and OSKM observations at the same time cannot simply be treated as biological replicates of one trajectory. They are represented as separate branches.
-
-This stage is therefore an example of the project principle that validation should be used to discover failure modes rather than only to confirm a desired model.
-
-### Stage 2.4 — Out-of-sample validation
-
-Stage 2.4 performs leave-one-timepoint-out validation and compares aligned prediction error with a naive unaligned baseline.
-
-The current results show partial generalization, but the behavior is heterogeneous across dataset pairs. Therefore the present PCA + Procrustes representation is **not yet accepted as the final biological common state space**.
-
-### Stage 2.5 — Planned next step
-
-The next methodological step is construction of a feature-level biological common representation based on comparable biological quantities rather than time-anchored PCA alignment alone.
-
-This is expected to include:
-
-1. shared gene space,
-2. human–mouse ortholog mapping where appropriate,
-3. scRNA-seq pseudobulk or carefully defined sample-level summaries,
-4. platform-aware preprocessing,
-5. batch-aware integration,
-6. common latent-factor modeling,
-7. renewed out-of-sample validation.
-
-Only after this representation passes appropriate validation should the project rely on symbolic regression and higher-level dynamic inference.
-
----
-
-# Important methodological principles
-
-## 1. Alignment is not biological validation
-
-Two trajectories can become highly similar after mathematical alignment even when the underlying biological states are not equivalent.
-
-Therefore:
-
-> **High post-alignment correlation is a diagnostic result, not evidence of biological equivalence.**
-
-## 2. Time must not define the state by itself
-
-A representation constructed directly from the expected time trajectory can artificially make samples at the same time appear similar.
-
-Actual sample-level variation must be retained and independently evaluated.
-
-## 3. Replicates are not interchangeable conditions
-
-Different perturbations, controls and treatment branches must not be treated as technical or biological replicates merely because they were measured at the same time.
-
-## 4. Cross-dataset prediction is more important than visual similarity
-
-A method that reconstructs the training datasets beautifully but fails on an independent experiment is not sufficient for the main research objective.
-
-## 5. Symbolic equations are hypotheses
-
-A symbolic-regression equation is an interpretable model candidate. It does not automatically establish causality or biological mechanism.
-
-## 6. Uncertainty must be explicit
-
-The final methodology should distinguish measured observations from derived quantities, inferred states and predictions, together with uncertainty and provenance.
-
----
-
-# Scientific contribution sought
-
-The intended scientific contribution is **not** simply a software implementation of a Digital Biological Twin.
-
-The primary contribution should be a validated methodology that answers whether heterogeneous biological observations can be transformed into a common dynamic representation that:
-
-- preserves meaningful biological variation,
-- reconstructs cellular trajectories,
-- identifies changes in state and stability,
-- supports prediction of future states,
-- generalizes to independent experiments,
-- and can yield interpretable mathematical descriptions of dynamics.
-
-A successful outcome would therefore be a chain of evidence:
+Important current components include:
 
 ```text
-heterogeneous data
-      ↓
-biological harmonization
-      ↓
-common state representation
-      ↓
-trajectory reconstruction
-      ↓
-dynamical model
-      ↓
-prediction
-      ↓
-independent validation
-      ↓
-interpretable model / equations
-      ↓
-Digital Biological Twin demonstrator
+Data/
+Dynamics.py
+GSE148158.py
+GSE28688.py
+GSE297234.py
+GSE52052.py
+GSE67462.py
+GSE67520.py
+Summary.py
+validate_pipeline.py
+
+dynamics/
+    stage24.py
+    stage26_v2.py
+    stage28.py
+    stage2928.py
+    stage2929.py
+    stage2930.py
+    stage2931.py
+    stage2932.py
+    stage210.py
+    validation.py
 ```
 
-An unsuccessful result at any stage is also scientifically informative if it identifies a limitation of the proposed representation or modeling assumptions.
+The exact set of experimental stages may evolve as hypotheses are falsified and replaced.
 
 ---
 
-# Long-term research direction
+# Reproducibility and validation
 
-A central long-term question is whether cellular reprogramming has a reproducible low-dimensional dynamical structure that can be learned from independent experiments:
+Analysis outputs are stored under `results/`, with Dynamics outputs under `results/Dynamics/`.
 
-\[
-\text{independent heterogeneous experiments}
-\rightarrow
-\text{shared biological state space}
-\rightarrow
-\text{geometry}
-\rightarrow
-\text{dynamics}
-\rightarrow
-\text{symbolic model}
-\rightarrow
-\text{external prediction}
-\]
+Validation reports should identify datasets used for training, held-out datasets or timepoints, selected features, preprocessing operations, model parameters, baselines, uncertainty estimates, permutation/bootstrap results and the final scientific interpretation.
 
-An especially interesting biological question is whether a mathematically detectable loss of stability precedes the transition toward pluripotency and whether this information can be used for early prediction of cell fate.
-
-These questions remain hypotheses to be tested rather than established conclusions.
+The project favors explicit negative results over hidden methodological failures.
 
 ---
 
-# Repository outputs
+# Expected scientific contribution
 
-Each analysis writes results to a dataset-specific directory under:
+The intended contribution is a **validated methodology for AI-assisted discovery of biological dynamics**, rather than simply a new predictor or a software package.
+
+A successful outcome would demonstrate a chain such as:
 
 ```text
-results/
+heterogeneous observations
+          ↓
+biological representation
+          ↓
+latent cellular state
+          ↓
+conserved + context-specific dynamics
+          ↓
+perturbation response
+          ↓
+competing mechanisms
+          ↓
+mathematical models
+          ↓
+predictions + uncertainty
+          ↓
+falsification
+          ↓
+informative experiment
 ```
 
-The `Dynamics.py` pipeline writes its outputs under:
+The final Digital Biological Twin would provide an interpretable interface to this chain.
 
-```text
-results/Dynamics/
-```
-
-including stage-specific diagnostic and validation outputs.
-
-The repository is intended to keep the analysis reproducible and traceable from source datasets through intermediate representations to final model diagnostics.
+A scientifically successful result does **not** require a single universal trajectory. It may instead show that different biological contexts require different dynamical mechanisms while sharing a smaller set of conserved principles.
 
 ---
 
-# Reproducibility
+# Long-term vision
 
-The project is developed and executed in a dedicated Python virtual environment.
-
-Example:
+The long-term objective is a system that can take heterogeneous observations of a biological system and reason about its future state in a scientifically testable way:
 
 ```text
-.venv\Scripts\python.exe Dynamics.py
+                 BIOLOGICAL DATA
+                       │
+                       ▼
+              KNOWLEDGE + AI
+                       │
+                       ▼
+                CELLULAR STATE
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+       SHARED DYNAMICS     CONTEXT / MEMORY
+              │                 │
+              └────────┬────────┘
+                       ▼
+              MECHANISTIC MODELS
+                       │
+                       ▼
+             PREDICTION / UNCERTAINTY
+                       │
+                       ▼
+              MODEL FALSIFICATION
+                       │
+                       ▼
+             OPTIMAL PERTURBATION
+                       │
+                       ▼
+             NEW BIOLOGICAL DATA
+                       │
+                       └──────────↺
 ```
 
-Input datasets are expected to be available locally in the project data directories according to the individual analysis scripts.
-
-Large raw archives and supplementary datasets should not be committed to the repository. The repository should contain code, lightweight metadata and derived results necessary for reproducibility and interpretation.
+This closed loop is the conceptual foundation for a future **Digital Biological Twin** and for AI systems that assist, rather than merely imitate, the scientific process.
 
 ---
 
-# Status
+## Status
 
-**Current status:** methodological development and validation.
+This repository is an active research project. Conclusions are intentionally updated as new validation experiments are performed.
 
-The project has successfully established:
+The current evidence supports reproducible temporal and biological structure in the analyzed datasets, but **does not yet establish a universally transferable predictive state or mechanism**.
 
-- reproducible exploratory analysis of multiple reprogramming datasets,
-- time-aware trajectory extraction,
-- branch-aware handling of experimental conditions,
-- common-trajectory diagnostics,
-- within-time replicate validation,
-- leave-one-timepoint-out validation.
-
-The current PCA + Procrustes common representation remains an **experimental baseline**. It has not yet been accepted as a biologically validated universal state space.
-
-The immediate research priority is therefore to develop and validate a feature-level biological common representation before relying on downstream symbolic dynamics.
+That distinction is central to the project: the goal is not to force the data to support a predetermined story, but to build methods capable of discovering what is conserved, what is context-dependent, and what can genuinely be predicted and experimentally tested.
