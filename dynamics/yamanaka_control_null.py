@@ -33,47 +33,38 @@ def _activity_networks():
 
 def _score_time_series(X, meta, net):
     import decoupler as dc
-    meta = meta.copy()
-    meta["day"] = pd.to_numeric(meta["day"], errors="coerce")
-    meta["group"] = meta["group"].astype(str)
-    meta = meta.dropna(subset=["day"])
-    meta = meta[meta.day.isin(EXPECTED_DAYS)]
-    meta = meta[meta.group.isin(X.columns)].sort_values(["day", "group"])
+    meta = meta.copy(); meta["day"] = pd.to_numeric(meta["day"], errors="coerce"); meta["group"] = meta["group"].astype(str)
+    meta = meta.dropna(subset=["day"]); meta = meta[meta.day.isin(EXPECTED_DAYS)]; meta = meta[meta.group.isin(X.columns)].sort_values(["day", "group"])
     if meta.empty: return pd.DataFrame()
-    samples = _log_cpm(X.loc[:, meta.group.tolist()]).T
-    samples.index = meta.group.tolist()
-    acts, _ = dc.mt.ulm(data=samples, net=net)
+    samples = _log_cpm(X.loc[:, meta.group.tolist()]).T; samples.index = meta.group.tolist()
+    shared = set(samples.columns) & set(net["target"].astype(str))
+    if not shared: return pd.DataFrame()
+    net_use = net[net["target"].astype(str).isin(shared)].copy()
+    if net_use.empty or net_use["source"].nunique() == 0: return pd.DataFrame()
+    acts, _ = dc.mt.ulm(data=samples.loc[:, sorted(shared)], net=net_use, tmin=1)
     acts = acts.apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
     acts["day"] = meta.set_index("group").loc[acts.index, "day"].astype(float)
     return acts
 
-def _day_centroids(frame):
-    return frame.groupby("day")[[c for c in frame.columns if c != "day"]].mean().sort_index()
+def _day_centroids(frame): return frame.groupby("day")[[c for c in frame.columns if c != "day"]].mean().sort_index()
 
 def _trajectory_rows(scored):
     names = sorted(scored)
     if len(names) < 2: return pd.DataFrame()
-    ca, cb = _day_centroids(scored[names[0]]), _day_centroids(scored[names[1]])
-    common = sorted(set(ca.index) & set(cb.index))
+    ca, cb = _day_centroids(scored[names[0]]), _day_centroids(scored[names[1]]); common = sorted(set(ca.index) & set(cb.index))
     if len(common) != len(EXPECTED_DAYS): return pd.DataFrame()
     rows=[]
     for feature in sorted(set(ca.columns)&set(cb.columns)):
         va, vb = ca.loc[common,feature].to_numpy(float), cb.loc[common,feature].to_numpy(float)
         if np.std(va)==0 or np.std(vb)==0: continue
-        ra = pd.Series(common).corr(pd.Series(va),method="spearman")
-        rb = pd.Series(common).corr(pd.Series(vb),method="spearman")
+        ra = pd.Series(common).corr(pd.Series(va),method="spearman"); rb = pd.Series(common).corr(pd.Series(vb),method="spearman")
         rows.append({"feature":feature,"observed_corr":float(np.corrcoef(va,vb)[0,1]),"rho_day_a":float(ra),"rho_day_b":float(rb),"conserved_direction":bool(np.sign(va[-1]-va[0])==np.sign(vb[-1]-vb[0]) and va[-1]!=va[0] and vb[-1]!=vb[0]),"abs_temporal_signal":float((abs(ra)+abs(rb))/2),"a_values":va.tolist(),"b_values":vb.tolist()})
     return pd.DataFrame(rows)
 
 def _temporal_null(rows):
-    perms=list(itertools.permutations(range(len(EXPECTED_DAYS))))
-    identity=tuple(range(len(EXPECTED_DAYS)))
-    null_perms=[p for p in perms if p != identity]
-    out=[]
+    perms=list(itertools.permutations(range(len(EXPECTED_DAYS)))); identity=tuple(range(len(EXPECTED_DAYS))); null_perms=[p for p in perms if p != identity]; out=[]
     for r in rows.itertuples(index=False):
-        va,vb=np.asarray(r.a_values,float),np.asarray(r.b_values,float)
-        null=np.array([np.corrcoef(va,vb[list(p)])[0,1] for p in null_perms],float)
-        obs=abs(float(r.observed_corr)); ge=int(np.sum(np.abs(null)>=obs-1e-12)); p=(ge+1)/(len(null)+1)
+        va,vb=np.asarray(r.a_values,float),np.asarray(r.b_values,float); null=np.array([np.corrcoef(va,vb[list(p)])[0,1] for p in null_perms],float); obs=abs(float(r.observed_corr)); ge=int(np.sum(np.abs(null)>=obs-1e-12)); p=(ge+1)/(len(null)+1)
         out.append({"feature":r.feature,"n_exact_null_permutations":len(null),"null_q95":float(np.quantile(null,.95)),"null_q99":float(np.quantile(np.abs(null),.99)),"empirical_two_sided_p":float(p),"passes_null1":bool(obs>np.quantile(np.abs(null),.99) and p<=.05)})
     return pd.DataFrame(out)
 
@@ -95,7 +86,12 @@ def _perturbation_activity(network,condition):
     for ds,path in PERTURBATION_FILES.items():
         X,_=load_expression(path); labels=condition_table(X,ds).set_index("sample")["condition"]; sig=_signature(X,labels,condition)
         if sig is None: continue
-        sample=pd.DataFrame([sig.to_numpy(float)],columns=sig.index,index=[f"{ds}__{condition}"]); acts,_=dc.mt.ulm(data=sample,net=network); result[ds]=acts.iloc[0].apply(float)
+        available=set(sig.index.astype(str)) & set(network["target"].astype(str))
+        if not available: continue
+        net_use=network[network["target"].astype(str).isin(available)].copy()
+        if net_use.empty or net_use["source"].nunique()==0: continue
+        cols=sorted(available); sample=pd.DataFrame([sig.reindex(cols).to_numpy(float)],columns=cols,index=[f"{ds}__{condition}"])
+        acts,_=dc.mt.ulm(data=sample,net=net_use,tmin=1); result[ds]=acts.iloc[0].apply(float)
     return result
 
 def _context_control(progeny,dorothea,candidates):
@@ -104,9 +100,7 @@ def _context_control(progeny,dorothea,candidates):
         datasets[rep]=sorted(acts); n_features=max((len(s) for s in acts.values()),default=0)
         for feature in candidates.get(rep,[]):
             if len(acts)<2 or any(feature not in a.index for a in acts.values()): rows.append({"representation":rep,"feature":feature,"status":"inconclusive","survives":False}); continue
-            names=sorted(acts); a,b=acts[names[0]][feature],acts[names[1]][feature]; direction=np.sign(a)==np.sign(b) and a!=0 and b!=0
-            ranks=[s.abs().sort_values(ascending=False).index.tolist().index(feature)+1 for s in acts.values()]; frac=max(ranks)/max(n_features,1)
-            confound=(rep=="PROGENy" and feature in CONFOUNDER_PROGENY) or (rep=="DoRothEA" and feature in CONFOUNDER_TF)
+            names=sorted(acts); a,b=acts[names[0]][feature],acts[names[1]][feature]; direction=np.sign(a)==np.sign(b) and a!=0 and b!=0; ranks=[s.abs().sort_values(ascending=False).index.tolist().index(feature)+1 for s in acts.values()]; frac=max(ranks)/max(n_features,1); confound=(rep=="PROGENy" and feature in CONFOUNDER_PROGENY) or (rep=="DoRothEA" and feature in CONFOUNDER_TF)
             rows.append({"representation":rep,"feature":feature,"activity_a":float(a),"activity_b":float(b),"concordant_direction":bool(direction),"worst_rank_fraction":float(frac),"known_delivery_confounded":bool(confound),"survives":bool(direction and frac<=.25 and not confound),"status":"ok"})
     return pd.DataFrame(rows),datasets
 
@@ -129,14 +123,12 @@ def _bootstrap_stability(scored,rep,features,seed):
     return pd.DataFrame(rows)
 
 def _assign_tiers(detail,context,stability):
-    out=detail.merge(context[["representation","feature","survives","known_delivery_confounded"]],on=["representation","feature"],how="left").merge(stability[["representation","feature","stable"]],on=["representation","feature"],how="left")
-    out["tier"]="NONE"; a=out.passes_null1.fillna(False)&out.passes_null2.fillna(False)&out.conserved_direction.fillna(False)&out.stable.fillna(False); out.loc[a,"tier"]="A"; b=a&out.survives.fillna(False)&~out.known_delivery_confounded.fillna(False); out.loc[b,"tier"]="B"; return out
+    out=detail.merge(context[["representation","feature","survives","known_delivery_confounded"]],on=["representation","feature"],how="left").merge(stability[["representation","feature","stable"]],on=["representation","feature"],how="left"); out["tier"]="NONE"; a=out.passes_null1.fillna(False)&out.passes_null2.fillna(False)&out.conserved_direction.fillna(False)&out.stable.fillna(False); out.loc[a,"tier"]="A"; b=a&out.survives.fillna(False)&~out.known_delivery_confounded.fillna(False); out.loc[b,"tier"]="B"; return out
 
 def _decision(tiered):
     a=tiered[tiered.tier=="A"]
     if a.empty: return {"decision":"CONFOUNDED_UNSUPPORTED","tier_a_n":0,"tier_b_n":0,"survival_rate":0.0,"reason":"No candidate passed temporal-order, monotonic-shape and stability gates."}
-    b=tiered[tiered.tier=="B"]; rate=len(b)/len(a); decision="PROCEED" if rate>=.60 else "MIXED" if rate>=.30 else "CONFOUNDED_UNSUPPORTED"
-    return {"decision":decision,"tier_a_n":int(len(a)),"tier_b_n":int(len(b)),"survival_rate":float(rate),"reason":"Decision follows the fixed Stage 2.11C thresholds."}
+    b=tiered[tiered.tier=="B"]; rate=len(b)/len(a); decision="PROCEED" if rate>=.60 else "MIXED" if rate>=.30 else "CONFOUNDED_UNSUPPORTED"; return {"decision":decision,"tier_a_n":int(len(a)),"tier_b_n":int(len(b)),"survival_rate":float(rate),"reason":"Decision follows the fixed Stage 2.11C thresholds."}
 
 def run():
     OUT.mkdir(parents=True,exist_ok=True); progeny,dorothea=_activity_networks(); scored={"PROGENy":{},"DoRothEA":{}}; audits=[]
