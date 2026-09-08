@@ -7,6 +7,7 @@ trajectories. No causal or mechanistic claim is made here.
 """
 from __future__ import annotations
 
+import ast
 import gzip
 import hashlib
 import json
@@ -24,6 +25,7 @@ TARGET = ROOT / "results" / "Dynamics" / "stage2_11c_control_null"
 EXPECTED_SHA = "8ce1e16a0039d93449e70aa6e827bbc8510a9b15dfbb78dc920cc2a2de5615a6"
 SEED = 20260911
 N_PERMUTATIONS = 10000
+YAMANAKA_DAYS = (0.0, 3.0, 7.0, 10.0)
 
 
 def sha256(path: Path) -> str:
@@ -89,11 +91,9 @@ def score_activity(expr: pd.DataFrame, net: pd.DataFrame, kind: str) -> pd.DataF
     n = net.copy()
     n["target"] = n["target"].astype(str).str.upper()
     n = n[n.target.isin(common)]
-    # decoupler expects source/target/weight network columns.
     result = dc.mt.ulm(data=x, net=n, tmin=5)
     if isinstance(result, tuple):
         result = result[0]
-    # ULM output has sample index and source columns in recent decoupler.
     if "source" in result.columns and "score" in result.columns:
         return result.pivot(index=result.index, columns="source", values="score")
     return result
@@ -113,31 +113,95 @@ def trajectory_matrix(activity: pd.DataFrame) -> pd.DataFrame:
         for feature, value in activity.loc[sample].items():
             rows.append({"individual": individual, "time": time, "feature": feature, "value": float(value)})
     long = pd.DataFrame(rows)
-    # Preserve repeated-measures structure: average only across the six
-    # independent individuals at each time point, never treat all 78 samples
-    # as independent trajectories.
     return long.groupby(["feature", "time"], as_index=False)["value"].mean().pivot(index="feature", columns="time", values="value")
 
 
-def load_target() -> pd.DataFrame:
+def _parse_value_array(raw, column: str, feature: str) -> np.ndarray:
+    """Parse one serialized four-point trajectory without concatenating variants."""
+    if isinstance(raw, (list, tuple, np.ndarray)):
+        values = raw
+    elif pd.isna(raw):
+        raise ValueError(f"Missing {column} for {feature}")
+    else:
+        text = str(raw).strip()
+        try:
+            values = json.loads(text)
+        except json.JSONDecodeError:
+            try:
+                values = ast.literal_eval(text)
+            except (ValueError, SyntaxError) as exc:
+                raise ValueError(f"Cannot parse {column} for {feature}: {raw!r}") from exc
+    values = np.asarray(values, dtype=float).reshape(-1)
+    if len(values) != 4:
+        raise ValueError(f"Unexpected {column} length for {feature}: {len(values)}; expected 4")
+    if not np.all(np.isfinite(values)):
+        raise ValueError(f"Non-finite value in {column} for {feature}")
+    return values
+
+
+def target_traj() -> tuple[pd.DataFrame, dict]:
+    """Load the saved Yamanaka trajectories using one canonical 4-point variant.
+
+    `a_values` and `b_values` are alternative encodings of the SAME trajectory,
+    not two temporal series to concatenate. Both must contain exactly the four
+    Yamanaka time points. `a_values` is the locked canonical representation;
+    `b_values` is parsed and checked as an integrity/consistency alternative.
+    """
     path = TARGET / "01_candidate_trajectories.csv"
     if not path.exists():
         raise FileNotFoundError(f"Missing saved target trajectories: {path}")
     df = pd.read_csv(path)
-    # Expected columns from Stage 2.11C are feature, day_a/day_b trajectory
-    # values. Fall back to explicit day columns if present.
     feature_col = next((c for c in ["feature", "candidate"] if c in df.columns), None)
     if feature_col is None:
         raise ValueError("Cannot identify feature column in 01_candidate_trajectories.csv")
-    value_cols = [c for c in df.columns if re.search(r"day|time", c, re.I)]
-    if len(value_cols) < 4:
-        numeric = df.select_dtypes(include=[np.number]).columns.tolist()
-        value_cols = numeric[:4]
-    if len(value_cols) < 4:
-        raise ValueError("Target trajectory file does not expose four temporal values")
-    out = df[[feature_col] + value_cols[:4]].copy().set_index(feature_col)
-    out.columns = [0.0, 3.0, 7.0, 10.0]
-    return out.apply(pd.to_numeric, errors="coerce")
+
+    if not {"a_values", "b_values"}.issubset(df.columns):
+        # Backward-compatible path for files that already expose four named
+        # temporal columns; this does not concatenate alternative variants.
+        value_cols = [c for c in df.columns if re.search(r"day|time", str(c), re.I)]
+        if len(value_cols) < 4:
+            numeric = df.select_dtypes(include=[np.number]).columns.tolist()
+            value_cols = numeric[:4]
+        if len(value_cols) < 4:
+            raise ValueError("Target trajectory file does not expose four temporal values")
+        out = df[[feature_col] + value_cols[:4]].copy().set_index(feature_col)
+        out.columns = list(YAMANAKA_DAYS)
+        return out.apply(pd.to_numeric, errors="coerce"), {
+            "source_columns": value_cols[:4],
+            "selection_rule": "Use the four explicit temporal columns in Yamanaka order; no concatenation.",
+            "n_points": 4,
+            "time_points": list(YAMANAKA_DAYS),
+        }
+
+    records = []
+    max_abs_diff = 0.0
+    for _, row in df.iterrows():
+        feature = str(row[feature_col])
+        a = _parse_value_array(row["a_values"], "a_values", feature)
+        b = _parse_value_array(row["b_values"], "b_values", feature)
+        diff = float(np.max(np.abs(a - b)))
+        max_abs_diff = max(max_abs_diff, diff)
+        if not np.allclose(a, b, rtol=1e-10, atol=1e-12):
+            raise ValueError(
+                f"a_values/b_values disagree for {feature}; refusing to choose silently "
+                f"(max_abs_diff={diff})"
+            )
+        records.append((feature, a))
+
+    out = pd.DataFrame(
+        [values for _, values in records],
+        index=[feature for feature, _ in records],
+        columns=YAMANAKA_DAYS,
+    )
+    audit = {
+        "source_columns": ["a_values", "b_values"],
+        "selection_rule": "Treat a_values and b_values as alternative encodings of one trajectory; require both length 4 and numerically agree, then use a_values as the canonical representation.",
+        "n_points": 4,
+        "time_points": list(YAMANAKA_DAYS),
+        "n_features": int(len(records)),
+        "max_abs_difference_a_vs_b": max_abs_diff,
+    }
+    return out, audit
 
 
 def align_and_stat(target: pd.DataFrame, control: pd.DataFrame):
@@ -146,8 +210,6 @@ def align_and_stat(target: pd.DataFrame, control: pd.DataFrame):
         raise ValueError(f"Too few common activity features: {len(common)}")
     t = target.loc[common].to_numpy(float)
     c = control.loc[common].to_numpy(float)
-    tc = np.nanmedian([np.corrcoef(row, np.nan_to_num(row, nan=np.nanmean(row))) for row in []]) if False else None
-    # Compare feature-wise temporal shapes, then aggregate by median.
     corrs = []
     for a, b in zip(t, c):
         mask = np.isfinite(a) & np.isfinite(b)
@@ -161,8 +223,6 @@ def permutation_null(target: pd.DataFrame, control: pd.DataFrame, rng: np.random
     t = target.loc[common].to_numpy(float)
     c = control.loc[common].to_numpy(float)
     vals = []
-    # Null breaks feature identity correspondence while preserving each
-    # feature's temporal trajectory in both datasets.
     for _ in range(N_PERMUTATIONS):
         perm = rng.permutation(len(common))
         cp = c[perm]
@@ -186,7 +246,7 @@ def main():
 
     expr = map_hgnc(parse_h3())
     nets = activity_networks()
-    target = load_target()
+    target, target_audit = target_traj()
     control_features = {}
     for kind, net in nets.items():
         activity = score_activity(expr, net, kind)
@@ -208,6 +268,7 @@ def main():
         "seed":SEED,
         "n_permutations":N_PERMUTATIONS,
         "observed_target_trajectory_file":str((TARGET/"01_candidate_trajectories.csv").relative_to(ROOT)),
+        "target_trajectory_mapping":target_audit,
         "controls":rows,
         "decision":{"status":"H3_UNRESOLVED","reason":"This stage establishes the prospective control comparison only; final H3 status requires the precommitted two-control set and relative-control margin."},
         "guardrail":"This analysis does not establish process specificity, causality, or mechanism. GSE263713 is one orthogonal temporal control candidate; it cannot by itself produce the final two-control H3 decision."
