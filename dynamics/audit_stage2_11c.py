@@ -32,14 +32,10 @@ PROTOCOL = ROOT / "dynamics" / "STAGE_2_11C_CONTROL_AND_NULL_PROTOCOL.md"
 CONTROL_SOURCE = ROOT / "dynamics" / "yamanaka_control_null.py"
 SUMMARY = OUT / "stage2_11c_summary.json"
 NULL1 = OUT / "02_null1_temporal_order.csv"
-CONTEXT = OUT / "04_context_control_OSK.csv"
-STABILITY = OUT / "05_candidate_stability.csv"
 TIERS = OUT / "06_candidate_tiers.csv"
-PERT_AUDIT = OUT / "07_perturbation_activity_audit.csv"
 MAPPING_DIAG = OUT / "08_gse297233_gene_id_diagnostic.json"
 
 PROTOCOL_COMMIT = "f90972f5f312b0e4ba39ec64693ccd63b7807c79"
-EXPECTED_DECISIONS = {"PROCEED", "MIXED", "SPECIFICITY_UNSUPPORTED", "INCONCLUSIVE"}
 
 
 def _sha256(path: Path) -> str | None:
@@ -53,6 +49,16 @@ def _git(*args: str) -> str:
         ).strip()
     except Exception:
         return ""
+
+
+def _git_bool(*args: str) -> bool | None:
+    try:
+        return subprocess.run(
+            ["git", *args], cwd=ROOT, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, check=False
+        ).returncode == 0
+    except Exception:
+        return None
 
 
 def _git_commit_meta(commit: str) -> dict:
@@ -153,9 +159,7 @@ def _provenance_audit() -> dict:
             protocol_before_output = pdt <= odt
         except Exception:
             protocol_before_output = None
-    history_ok = bool(protocol_meta.get("available")) and (
-        not head or bool(_git("merge-base", "--is-ancestor", PROTOCOL_COMMIT, head))
-    )
+    history_ok = _git_bool("merge-base", "--is-ancestor", PROTOCOL_COMMIT, "HEAD")
     return {
         "protocol_commit": protocol_meta,
         "current_head": head_meta,
@@ -165,9 +169,9 @@ def _provenance_audit() -> dict:
         "protocol_commit_precedes_output_file_mtime": protocol_before_output,
         "protocol_commit_reachable_from_current_head": history_ok,
         "provenance_conclusion": (
-            "The decision thresholds are present in a Git commit dated before the existing output file timestamp. This supports pre-specification of the thresholds for this local result, although the output file timestamp is not a cryptographic record of execution time."
-            if protocol_before_output is True
-            else "Pre-specification timing could not be established from the available Git/output metadata."
+            "The protocol commit predates the saved result file timestamp and is reachable from the current Git history. This supports that the thresholds were recorded before the observed local result, while the filesystem timestamp is not itself a cryptographic execution log."
+            if protocol_before_output is True and history_ok is True
+            else "Pre-specification timing could not be established conclusively from the available Git/output metadata."
         ),
     }
 
@@ -185,7 +189,7 @@ def _implementation_audit() -> dict:
         "null1_threshold_mismatch": protocol_p01 and source_p005,
         "implementation_uses_confound_label": source_confound_label,
         "context_control_is_heterologous": "heterologous" in protocol.lower(),
-        "implementation_conclusion": "The current protocol and implementation are internally inconsistent on the Null-1 p-value threshold; this must be resolved before treating the run as a strict protocol-compliant confirmatory result." if protocol_p01 and source_p005 else "No Null-1 threshold mismatch detected.",
+        "implementation_conclusion": "The current protocol and implementation are internally inconsistent on the Null-1 p-value threshold. The historical run must therefore be treated as exploratory rather than strict protocol-confirmatory until the prospective correction is locked." if protocol_p01 and source_p005 else "No Null-1 threshold mismatch detected.",
     }
 
 
@@ -202,12 +206,12 @@ def _statistics_audit() -> dict:
     else:
         q_values = pd.DataFrame(columns=["feature", pcol, "bh_q_value_global", "bh_significant_global"])
     merged = tiers.merge(q_values, on="feature", how="left")
-    tier_a = merged[merged.get("tier", "") == "A"]
-    tier_b = merged[merged.get("tier", "") == "B"]
+    tier_a = merged[merged["tier"].astype(str) == "A"] if "tier" in merged else merged.iloc[0:0]
+    tier_b = merged[merged["tier"].astype(str) == "B"] if "tier" in merged else merged.iloc[0:0]
     return {
         "status": "checked",
         "n_null1_tests": int(len(null1)),
-        "n_null1_bh_significant_global": int(null1.get("bh_significant_global", pd.Series(dtype=bool)).sum()),
+        "n_null1_bh_significant_global": int(null1["bh_significant_global"].sum()) if "bh_significant_global" in null1 else 0,
         "n_tier_a": int(len(tier_a)),
         "n_tier_b": int(len(tier_b)),
         "tier_b_is_deterministic_filter": True,
