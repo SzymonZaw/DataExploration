@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import ast, hashlib, json, re
 from pathlib import Path
 import numpy as np
 import pandas as pd
+
 ROOT=Path(__file__).resolve().parents[1]; DATA=ROOT/'Data'; OUT=ROOT/'results'/'Dynamics'/'stage2_11c_h3_control_redesign'; TARGET=ROOT/'results'/'Dynamics'/'stage2_11c_control_null'; H3=DATA/'GSE263713_raw_counts.tsv.gz'; EXPECTED_SHA='8ce1e16a0039d93449e70aa6e827bbc8510a9b15dfbb78dc920cc2a2de5615a6'; SEED=20260911; N_PERMUTATIONS=10000; SAMPLE_RE=re.compile(r'^([^-]+)-TP-(\d+(?:\.\d+)?)$')
 def sha256(p):
  h=hashlib.sha256()
@@ -49,14 +51,15 @@ def target_traj():
  p=TARGET/'01_candidate_trajectories.csv'; d=pd.read_csv(p)
  fc=next((c for c in ('feature','candidate','source') if c in d.columns),None)
  if fc is None: raise ValueError('No feature column in target trajectories')
- if 'a_values' in d.columns and 'b_values' in d.columns:
-  rows=[]
-  for _,r in d.iterrows():
-   av=parse_list(r['a_values']); bv=parse_list(r['b_values'])
-   if len(av)+len(bv)!=4: raise ValueError(f'Unexpected a_values/b_values lengths for {r[fc]}: {len(av)}/{len(bv)}')
-   rows.append([r[fc],*av,*bv])
-  return pd.DataFrame(rows,columns=[fc,0.,3.,7.,10.]).set_index(fc).apply(pd.to_numeric,errors='coerce')
- raise ValueError('Target trajectories must expose a_values and b_values in the locked historical format')
+ if 'a_values' not in d.columns or 'b_values' not in d.columns: raise ValueError('Target trajectories must expose a_values and b_values in the locked historical format')
+ rows=[]
+ for _,r in d.iterrows():
+  av=parse_list(r['a_values']); bv=parse_list(r['b_values'])
+  if len(av)!=4 or len(bv)!=4: raise ValueError(f'Unexpected a_values/b_values lengths for {r[fc]}: {len(av)}/{len(bv)}')
+  # a_values and b_values are two cohort trajectories for the same feature.
+  # They represent the same four time points, so average them pointwise.
+  rows.append([r[fc],*np.nanmean(np.asarray([av,bv],dtype=float),axis=0)])
+ return pd.DataFrame(rows,columns=[fc,0.,3.,7.,10.]).set_index(fc).apply(pd.to_numeric,errors='coerce')
 def stat(a,b):
  common=a.index.intersection(b.index); aa=a.loc[common].to_numpy(float); bb=b.loc[common].to_numpy(float); vals=[]
  for x,y in zip(aa,bb):
@@ -83,6 +86,6 @@ def main():
   ctl=control_traj(activity(expr,net)); obs,n=stat(target,ctl); nd=null(target,ctl,rng); p=(1+int(np.nansum(nd>=obs)))/(N_PERMUTATIONS+1)
   rows.append({'control':'GSE263713','feature_family':family,'n_common_features':n,'observed_median_trajectory_corr':obs,'null_median':float(np.nanmedian(nd)),'null_q95':float(np.nanquantile(nd,.95)),'empirical_one_sided_p':float(p)})
   pd.DataFrame({'null_statistic':nd}).to_csv(OUT/f'H3_GSE263713_{family}_NULL.csv',index=False)
- result={'status':'ok','accession':'GSE263713','seed':SEED,'n_permutations':N_PERMUTATIONS,'target_trajectory_format':'a_values+b_values from historical 01_candidate_trajectories.csv','temporal_alignment':[0.0,3.0,7.0,10.0],'controls':rows,'decision':{'status':'H3_UNRESOLVED','reason':'One orthogonal temporal control is insufficient for the precommitted final H3 decision.'},'guardrail':'Similarity is a falsification diagnostic, not evidence of causality or mechanism.'}
+ result={'status':'ok','accession':'GSE263713','seed':SEED,'n_permutations':N_PERMUTATIONS,'target_trajectory_format':'a_values and b_values are two cohort trajectories averaged pointwise at the four Yamanaka time points','temporal_alignment':[0.0,3.0,7.0,10.0],'controls':rows,'decision':{'status':'H3_UNRESOLVED','reason':'One orthogonal temporal control is insufficient for the precommitted final H3 decision.'},'guardrail':'Similarity is a falsification diagnostic, not evidence of causality or mechanism.'}
  (OUT/'H3_GSE263713_SIMILARITY_RESULT.json').write_text(json.dumps(result,indent=2)); pd.DataFrame(rows).to_csv(OUT/'H3_GSE263713_SIMILARITY_RESULT.csv',index=False); print(json.dumps(result,indent=2))
 if __name__=='__main__': main()
