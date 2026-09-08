@@ -1,0 +1,29 @@
+{
+  "status": "locked_manifest",
+  "protocol": "STAGE_2_11C_SIGNAL_ATTRIBUTION_PROTOCOL.md",
+  "purpose": "H3 unrelated temporal negative controls",
+  "datasets": [
+    {
+      "id": "GSE175533",
+      "process": "replicative cellular senescence / cellular lifespan",
+      "organism": "Homo sapiens",
+      "representation_input": "transcriptomic expression",
+      "source": "GEO",
+      "primary_resource": "GSE175533_hTERT.RS.RIS.CD.TPM_table.xlsx",
+      "path": "Data/GSE175533_hTERT.RS.RIS.CD.TPM_table.xlsx",
+      "role": "unrelated_temporal_negative_control_1"
+    },
+    {
+      "id": "GSE179848",
+      "process": "replicative cellular lifespan / aging",
+      "organism": "Homo sapiens",
+      "representation_input": "gene-level RNA-seq expression",
+      "source": "GEO",
+      "primary_resource": "GSE179848_processed_cell_lifespan_RNAseq_data.csv.gz",
+      "path": "Data/GSE179848_processed_cell_lifespan_RNAseq_data.csv.gz",
+      "role": "unrelated_temporal_negative_control_2"
+    }
+  ],
+  "locked_before_h3_analysis": true,
+  "replacement_after_result_inspection_forbidden": true
+}
