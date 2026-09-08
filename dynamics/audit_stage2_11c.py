@@ -34,7 +34,6 @@ SUMMARY = OUT / "stage2_11c_summary.json"
 NULL1 = OUT / "02_null1_temporal_order.csv"
 TIERS = OUT / "06_candidate_tiers.csv"
 MAPPING_DIAG = OUT / "08_gse297233_gene_id_diagnostic.json"
-
 PROTOCOL_COMMIT = "f90972f5f312b0e4ba39ec64693ccd63b7807c79"
 
 
@@ -199,42 +198,59 @@ def _statistics_audit() -> dict:
     null1 = pd.read_csv(NULL1)
     tiers = pd.read_csv(TIERS)
     pcol = "empirical_two_sided_p"
-    if pcol in null1.columns:
-        null1["bh_q_value_global"] = _bh(null1[pcol])
-        null1["bh_significant_global"] = null1["bh_q_value_global"] < 0.05
-        q_values = null1[["feature", pcol, "bh_q_value_global", "bh_significant_global"]]
-    else:
-        q_values = pd.DataFrame(columns=["feature", pcol, "bh_q_value_global", "bh_significant_global"])
+    if pcol not in null1.columns:
+        return {"status": "missing_p_values", "interpretation": "The saved Null-1 table does not contain empirical p-values."}
+
+    null1["bh_q_value_global"] = _bh(null1[pcol])
+    null1["bh_significant_global"] = null1["bh_q_value_global"] < 0.05
+    q_values = null1[["feature", pcol, "bh_q_value_global", "bh_significant_global"]]
     merged = tiers.merge(q_values, on="feature", how="left")
-    tier_a = merged[merged["tier"].astype(str) == "A"] if "tier" in merged else merged.iloc[0:0]
-    tier_b = merged[merged["tier"].astype(str) == "B"] if "tier" in merged else merged.iloc[0:0]
+    tier_a = merged[merged["tier"].astype(str) == "A"]
+    tier_b = merged[merged["tier"].astype(str) == "B"]
+    tier_a_fdr = tier_a[tier_a["bh_significant_global"].fillna(False)]
+    tier_b_fdr = tier_b[tier_b["bh_significant_global"].fillna(False)]
     return {
         "status": "checked",
         "n_null1_tests": int(len(null1)),
-        "n_null1_bh_significant_global": int(null1["bh_significant_global"].sum()) if "bh_significant_global" in null1 else 0,
-        "n_tier_a": int(len(tier_a)),
-        "n_tier_b": int(len(tier_b)),
+        "n_null1_bh_significant_global": int(null1["bh_significant_global"].sum()),
+        "n_historical_tier_a": int(len(tier_a)),
+        "n_historical_tier_b": int(len(tier_b)),
+        "n_tier_a_after_null1_bh": int(len(tier_a_fdr)),
+        "n_tier_b_after_null1_bh": int(len(tier_b_fdr)),
         "tier_b_is_deterministic_filter": True,
         "tier_b_inferential_p_value_present": False,
         "tier_b_multiple_testing_correction_applicable": False,
         "bh_scope": "all existing Null-1 candidate p-values in the saved 02_null1_temporal_order.csv",
         "interpretation": "Tier-B survival itself is a deterministic conjunction of direction/rank/confound filters, not an alpha-level statistical test. Multiple-testing correction is therefore applied here to the existing Null-1 p-values, not to the 1/28 survival count.",
+        "prospective_reclassification": "A future v2 Tier-A gate must require BH q < 0.05 in addition to the raw exact-permutation gate.",
         "candidate_q_values": q_values.to_dict(orient="records"),
     }
 
 
-def _candidate_audit() -> dict:
+def _candidate_audit(statistics: dict) -> dict:
     if not TIERS.exists():
         return {"status": "missing"}
     tiers = pd.read_csv(TIERS)
     b = tiers[tiers["tier"].astype(str) == "B"].copy()
     records = b.to_dict(orient="records")
+    q_by_feature = {
+        str(r["feature"]): r.get("bh_q_value_global")
+        for r in statistics.get("candidate_q_values", [])
+    }
     for r in records:
+        r["bh_q_value_global"] = q_by_feature.get(str(r.get("feature")))
+        q = r["bh_q_value_global"]
+        r["passes_prospective_fdr_gate"] = bool(pd.notna(q) and float(q) < 0.05)
         r["independent_literature_validation"] = "not performed by this audit"
-        r["candidate_status"] = "candidate_only_pending_external_validation"
+        r["candidate_status"] = (
+            "candidate_only_pending_external_validation"
+            if r["passes_prospective_fdr_gate"]
+            else "not_statistically_supported_after_bh"
+        )
     return {
         "status": "checked",
-        "n_tier_b": int(len(b)),
+        "n_historical_tier_b": int(len(b)),
+        "n_tier_b_after_bh": int(sum(r["passes_prospective_fdr_gate"] for r in records)),
         "surviving_candidates": records,
         "promotion_rule": "Do not promote a Tier-B candidate to a mechanistic claim from Stage 2.11C alone.",
     }
@@ -246,7 +262,7 @@ def run() -> dict:
     provenance = _provenance_audit()
     implementation = _implementation_audit()
     statistics = _statistics_audit()
-    candidate = _candidate_audit()
+    candidate = _candidate_audit(statistics)
 
     historical_decision = None
     if SUMMARY.exists():
@@ -278,10 +294,10 @@ def run() -> dict:
             "not_supported_claims": [
                 "Sendai is the identified confounder",
                 "interferon/STAT is proven to cause the temporal signal",
-                "the single Tier-B candidate is a true positive",
+                "the single historical Tier-B candidate is a true positive",
             ],
         },
-        "recommended_next_gate": "Resolve the Null-1 protocol/implementation mismatch, lock the exact gene mapping table or annotation version, then reassess the saved candidate p-values with BH correction before any biological interpretation.",
+        "recommended_next_gate": "Use the audit output to resolve the protocol/implementation mismatch and lock the exact gene mapping artifact before any prospective validation run.",
     }
 
     (OUT / "09_stage2_11c_audit.json").write_text(
