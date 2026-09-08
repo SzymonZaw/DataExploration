@@ -37,19 +37,42 @@ def status(ok: bool, reason: str = "") -> dict:
     return {"status": "pass" if ok else "fail", "reason": reason}
 
 
-def infer_time(text: str):
-    s = str(text).lower()
-    patterns = [
-        r"(?:^|[_ ;:/-])(?:t|time|hour|hr|h)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:h|hr|hours?)?",
-        r"(?:^|[_ ;:/-])([0-9]+(?:\.[0-9]+)?)\s*h(?:ours?)?(?:$|[_ ;:/-])",
-        r"(?:^|[_ ;:/-])day\s*([0-9]+(?:\.[0-9]+)?)",
-        r"(?:^|[_ ;:/-])d\s*([0-9]+(?:\.[0-9]+)?)",
-    ]
-    for p in patterns:
-        m = re.search(p, s)
-        if m:
-            return float(m.group(1))
-    if re.search(r"(?:^|[_ ;:/-])0(?:h|hr|hours?)?(?:$|[_ ;:/-])", s):
+def infer_time(value):
+    """Infer time in hours from common GEO metadata/title formats."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    s = str(value).strip().lower()
+    if not s:
+        return None
+
+    # Numeric metadata such as GSE129486's time column is already in hours.
+    try:
+        return float(s)
+    except ValueError:
+        pass
+
+    # Explicit hours, including decimal values.
+    m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(?:h|hr|hrs|hour|hours)\b", s)
+    if m:
+        return float(m.group(1))
+
+    # Explicit minutes, converted to hours.
+    m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(?:min|mins|minute|minutes)\b", s)
+    if m:
+        return float(m.group(1)) / 60.0
+
+    # Fractional hour written as e.g. "1 1/2 hr".
+    m = re.search(r"([0-9]+)\s+([0-9]+)\s*/\s*([0-9]+)\s*(?:h|hr|hrs|hour|hours)\b", s)
+    if m:
+        return float(m.group(1)) + float(m.group(2)) / float(m.group(3))
+
+    # Day-based labels, converted to hours.
+    m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(?:day|days|d)\b", s)
+    if m:
+        return float(m.group(1)) * 24.0
+
+    # Bare zero labels such as "0 hr." or "0" embedded in text.
+    if re.search(r"(?:^|[^0-9])0(?:\s*(?:h|hr|hrs|hour|hours))?(?:[^0-9]|$)", s):
         return 0.0
     return None
 
@@ -57,7 +80,7 @@ def infer_time(text: str):
 def parse_geo_annotation_line(line: str, key: str) -> list[str]:
     """Parse a GEO series-matrix annotation line after its key.
 
-    GEO series matrix files use whitespace/tab-separated metadata lines such as
+    GEO series matrix files use tab-separated metadata lines such as
     ``!Sample_title\t"sample 1"\t"sample 2"``; they do not use ``=`` here.
     """
     payload = line[len(key):].lstrip("\t =")
@@ -85,14 +108,17 @@ def parse_geo_series_matrix(path: Path) -> dict:
                 break
     if not data_lines:
         return {"status": "fail", "reason": "GEO series matrix table not found"}
-    header = next(csv.reader([data_lines[0].rstrip("\n")]), [])
+
+    # GEO series-matrix expression tables are tab-delimited.
+    header = next(csv.reader([data_lines[0].rstrip("\n")], delimiter="\t"), [])
     rows = []
     for line in data_lines[1:]:
         if line.startswith("!series_matrix_table_end"):
             break
-        vals = next(csv.reader([line.rstrip("\n")]), [])
+        vals = next(csv.reader([line.rstrip("\n")], delimiter="\t"), [])
         if vals:
             rows.append(vals)
+
     ncols = len(header)
     lengths_ok = all(len(r) == ncols for r in rows[:1000])
     sample_cols = header[1:]
@@ -111,6 +137,7 @@ def parse_geo_series_matrix(path: Path) -> dict:
                 except ValueError:
                     pass
         numeric_fraction = numeric / total if total else 0.0
+
     time_values = []
     for i, sid in enumerate(samples):
         text_parts = [sid]
@@ -120,10 +147,17 @@ def parse_geo_series_matrix(path: Path) -> dict:
             if i < len(ch):
                 text_parts.append(ch[i])
         time_values.append(infer_time(" ".join(text_parts)))
+
+    structure_ok = bool(
+        lengths_ok
+        and gene_col
+        and len(sample_cols) > 0
+        and numeric_fraction > 0.95
+    )
     return {
-        "status": "pass" if lengths_ok and gene_col and numeric_fraction > 0.95 else "fail",
-        "reason": "" if lengths_ok and gene_col and numeric_fraction > 0.95 else "matrix structure could not be validated",
-        "matrix_orientation": "gene_x_sample" if lengths_ok and gene_col and numeric_fraction > 0.95 else "unresolved",
+        "status": "pass" if structure_ok else "fail",
+        "reason": "" if structure_ok else "matrix structure could not be validated",
+        "matrix_orientation": "gene_x_sample" if structure_ok else "unresolved",
         "n_samples": len(sample_cols),
         "n_rows": len(rows),
         "gene_identifier_column": gene_col,
