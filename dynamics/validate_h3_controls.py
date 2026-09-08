@@ -54,6 +54,18 @@ def infer_time(text: str):
     return None
 
 
+def parse_geo_annotation_line(line: str, key: str) -> list[str]:
+    """Parse a GEO series-matrix annotation line after its key.
+
+    GEO series matrix files use whitespace/tab-separated metadata lines such as
+    ``!Sample_title\t"sample 1"\t"sample 2"``; they do not use ``=`` here.
+    """
+    payload = line[len(key):].lstrip("\t =")
+    if not payload:
+        return []
+    return next(csv.reader([payload], delimiter="\t"), [])
+
+
 def parse_geo_series_matrix(path: Path) -> dict:
     samples = []
     titles = []
@@ -62,11 +74,11 @@ def parse_geo_series_matrix(path: Path) -> dict:
     with gzip.open(path, "rt", encoding="utf-8", errors="replace") as fh:
         for line in fh:
             if line.startswith("!Sample_geo_accession"):
-                samples = next(csv.reader([line.split("=", 1)[1].strip()]), [])
+                samples = parse_geo_annotation_line(line, "!Sample_geo_accession")
             elif line.startswith("!Sample_title"):
-                titles = next(csv.reader([line.split("=", 1)[1].strip()]), [])
+                titles = parse_geo_annotation_line(line, "!Sample_title")
             elif line.startswith("!Sample_characteristics_ch1"):
-                vals = next(csv.reader([line.split("=", 1)[1].strip()]), [])
+                vals = parse_geo_annotation_line(line, "!Sample_characteristics_ch1")
                 characteristics.append(vals)
             elif line.startswith("!series_matrix_table_begin"):
                 data_lines = list(fh)
