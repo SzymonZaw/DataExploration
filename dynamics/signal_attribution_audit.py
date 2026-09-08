@@ -1,8 +1,7 @@
 """Stage 2.11C: direct attribution audit for process-specific state information.
 
-This module deliberately does not rerun the expensive Yamanaka pipeline. It audits
-saved Stage 2.11C trajectory outputs and optional pre-registered negative controls.
-Missing design blocks are reported as unresolved rather than silently substituted.
+This module audits saved outputs only. It deliberately does not rerun the expensive
+Yamanaka pipeline and reports unavailable design blocks as unresolved.
 """
 from __future__ import annotations
 
@@ -23,9 +22,7 @@ N_PERMUTATIONS = 10_000
 
 def _read_csv(name: str) -> pd.DataFrame:
     path = OUT / name
-    if not path.exists():
-        return pd.DataFrame()
-    return pd.read_csv(path)
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
 
 
 def _protocol_hash() -> str:
@@ -39,13 +36,27 @@ def _parse_array(value: object) -> np.ndarray:
 
 
 def _feature_family_counts(rows: pd.DataFrame) -> dict:
-    if rows.empty or "representation" not in rows:
+    if rows.empty or "representation" not in rows.columns:
         return {}
     return {str(k): int(v) for k, v in rows["representation"].value_counts().sort_index().items()}
 
 
+def _trajectory_source(null1: pd.DataFrame, tiers: pd.DataFrame) -> pd.DataFrame:
+    """Return the saved table that actually contains observed correlations and trajectories.
+
+    02_null1_temporal_order.csv contains the null-test results only; the observed
+    trajectory vectors live in the candidate trajectory/tier table. Earlier code
+    incorrectly assumed both schemas were identical, causing KeyError: observed_corr.
+    """
+    required = {"observed_corr", "abs_temporal_signal", "conserved_direction", "a_values", "b_values"}
+    if required.issubset(tiers.columns):
+        return tiers
+    if required.issubset(null1.columns):
+        return null1
+    return pd.DataFrame()
+
+
 def _trajectory_signal_audit(rows: pd.DataFrame) -> dict:
-    """Quantify the existing process trajectory agreement without calling it specificity."""
     if rows.empty:
         return {"status": "missing", "n_features": 0}
     observed = pd.to_numeric(rows["observed_corr"], errors="coerce").dropna().to_numpy(float)
@@ -64,45 +75,38 @@ def _trajectory_signal_audit(rows: pd.DataFrame) -> dict:
 
 
 def _whole_representation_permutation(rows: pd.DataFrame) -> dict:
-    """Test whether cross-dataset feature alignment is stronger than a feature-label shuffle.
-
-    This is intentionally a secondary diagnostic. It uses the already saved four-point
-    trajectories and therefore cannot replace the prospective sample-level process
-    discrimination block from the protocol.
-    """
     if rows.empty or not {"a_values", "b_values"}.issubset(rows.columns):
         return {"status": "missing"}
     pairs = []
     for r in rows.itertuples(index=False):
-        a, b = _parse_array(r.a_values), _parse_array(r.b_values)
+        try:
+            a, b = _parse_array(r.a_values), _parse_array(r.b_values)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
         if len(a) == len(b) and len(a) >= 3 and np.std(a) > 0 and np.std(b) > 0:
             pairs.append((a, b))
     if len(pairs) < 10:
         return {"status": "insufficient_features", "n_features": len(pairs)}
-    A = np.vstack([x[0] for x in pairs])
-    B = np.vstack([x[1] for x in pairs])
-    # Standardize feature vectors across time, then compare paired and shuffled
-    # cosine similarity. This asks whether feature identity contributes to alignment.
+    A = np.vstack([a for a, _ in pairs])
+    B = np.vstack([b for _, b in pairs])
     def z(x):
         s = x.std(axis=1, keepdims=True)
         return (x - x.mean(axis=1, keepdims=True)) / np.where(s == 0, 1, s)
     ZA, ZB = z(A), z(B)
-    paired = np.sum(ZA * ZB, axis=1) / ZA.shape[1]
-    observed = float(np.mean(paired))
+    observed = float(np.mean(np.sum(ZA * ZB, axis=1) / ZA.shape[1]))
     rng = np.random.default_rng(SEED)
     null = np.empty(N_PERMUTATIONS, dtype=float)
     for i in range(N_PERMUTATIONS):
         perm = rng.permutation(len(pairs))
         null[i] = float(np.mean(np.sum(ZA * ZB[perm], axis=1) / ZA.shape[1]))
     ge = int(np.sum(null >= observed - 1e-12))
-    p = (ge + 1) / (N_PERMUTATIONS + 1)
     return {
         "status": "secondary_diagnostic",
         "n_features": int(len(pairs)),
         "observed_mean_feature_similarity": observed,
         "null_median": float(np.median(null)),
         "null_q95": float(np.quantile(null, 0.95)),
-        "empirical_one_sided_p": float(p),
+        "empirical_one_sided_p": float((ge + 1) / (N_PERMUTATIONS + 1)),
         "interpretation": "Feature identity contributes to cross-dataset trajectory alignment under this diagnostic; this is not proof of process specificity.",
     }
 
@@ -110,26 +114,21 @@ def _whole_representation_permutation(rows: pd.DataFrame) -> dict:
 def _context_audit(context: pd.DataFrame) -> dict:
     if context.empty:
         return {"status": "missing"}
-    if "known_delivery_confounded" not in context:
+    if "known_delivery_confounded" not in context.columns:
         return {"status": "incomplete"}
     return {
         "status": "heterologous_only",
         "n_rows": int(len(context)),
-        "n_survives": int(context.get("survives", pd.Series(dtype=bool)).fillna(False).astype(bool).sum()),
+        "n_survives": int(context.get("survives", pd.Series(False, index=context.index)).fillna(False).astype(bool).sum()),
         "n_known_delivery_confounded": int(context["known_delivery_confounded"].fillna(False).astype(bool).sum()),
         "limitation": "GSE304042 changes multiple biological/experimental factors and cannot identify a unique confounder.",
     }
 
 
 def _negative_control_audit() -> dict:
-    """Require explicitly named, pre-registered unrelated temporal-control files."""
     manifest = OUT / "signal_attribution_negative_controls.json"
     if not manifest.exists():
-        return {
-            "status": "missing",
-            "required": True,
-            "reason": "No pre-registered unrelated temporal negative-control manifest is present.",
-        }
+        return {"status": "missing", "required": True, "reason": "No pre-registered unrelated temporal negative-control manifest is present."}
     try:
         spec = json.loads(manifest.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -138,16 +137,10 @@ def _negative_control_audit() -> dict:
     if len(datasets) < 2:
         return {"status": "insufficient", "n_declared": len(datasets), "required_minimum": 2}
     missing = [str(x.get("path", "")) for x in datasets if not (ROOT / str(x.get("path", ""))).exists()]
-    return {
-        "status": "ready" if not missing else "missing_files",
-        "n_declared": len(datasets),
-        "missing_files": missing,
-        "datasets": datasets,
-    }
+    return {"status": "ready" if not missing else "missing_files", "n_declared": len(datasets), "missing_files": missing, "datasets": datasets}
 
 
 def _decision(blocks: dict) -> tuple[str, str]:
-    # A cannot be assigned unless all four protocol blocks are actually available.
     neg = blocks["unrelated_temporal_controls"]
     process = blocks["process_discrimination"]
     nuisance = blocks["nuisance_residualization"]
@@ -172,17 +165,10 @@ def run() -> dict:
     null1 = _read_csv("02_null1_temporal_order.csv")
     context = _read_csv("04_context_control_OSK.csv")
     tiers = _read_csv("06_candidate_tiers.csv")
+    trajectory_rows = _trajectory_source(null1, tiers)
 
-    # The historical output does not contain sample-level state vectors. Do not invent
-    # them from feature-level summaries; this block stays explicitly unavailable.
-    process_discrimination = {
-        "status": "not_analyzed",
-        "reason": "Saved Stage 2.11C outputs contain feature trajectories, not independent sample-level state vectors/outcomes required for cross-validated process discrimination.",
-    }
-    nuisance = {
-        "status": "not_analyzed",
-        "reason": "No locked sample-level nuisance matrix is persisted in the historical output.",
-    }
+    process_discrimination = {"status": "not_analyzed", "reason": "Saved Stage 2.11C outputs contain feature trajectories, not independent sample-level state vectors/outcomes required for cross-validated process discrimination."}
+    nuisance = {"status": "not_analyzed", "reason": "No locked sample-level nuisance matrix is persisted in the historical output."}
     negative = _negative_control_audit()
     blocks = {
         "process_discrimination": process_discrimination,
@@ -191,9 +177,8 @@ def run() -> dict:
         "nuisance_residualization": nuisance,
     }
     decision, reason = _decision(blocks)
-
-    trajectory = _trajectory_signal_audit(null1)
-    alignment = _whole_representation_permutation(null1)
+    trajectory = _trajectory_signal_audit(trajectory_rows)
+    alignment = _whole_representation_permutation(trajectory_rows)
     summary = {
         "status": "ok",
         "audit_scope": "saved Stage 2.11C outputs only; no expensive pipeline rerun",
