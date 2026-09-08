@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import re
 import tempfile
 from pathlib import Path
 import numpy as np
@@ -20,9 +21,11 @@ CONFOUNDER_PROGENY = {"JAK-STAT"}
 CONFOUNDER_TF = {"IRF1", "IRF2", "IRF9", "STAT1", "STAT2"}
 PERTURBATION_FILES = {"GSE297233": DATA / "GSE297233_raw_counts_matrix.csv.gz", "GSE304042": DATA / "GSE304042_5_ARPE_single_triple_OSK_30-1011800743.csv.gz"}
 
+
 def _protocol_hash():
     p = ROOT / "dynamics" / "STAGE_2_11C_CONTROL_AND_NULL_PROTOCOL.md"
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else "missing"
+
 
 def _activity_networks():
     try:
@@ -30,6 +33,7 @@ def _activity_networks():
     except ImportError as exc:
         raise RuntimeError("Stage 2.11C requires decoupler. Install requirements-ai.txt.") from exc
     return dc.op.progeny(organism="human", top=100), dc.op.dorothea(organism="human", levels=["A", "B", "C"])
+
 
 def _score_time_series(X, meta, net):
     import decoupler as dc
@@ -46,7 +50,9 @@ def _score_time_series(X, meta, net):
     acts["day"] = meta.set_index("group").loc[acts.index, "day"].astype(float)
     return acts
 
+
 def _day_centroids(frame): return frame.groupby("day")[[c for c in frame.columns if c != "day"]].mean().sort_index()
+
 
 def _trajectory_rows(scored):
     names = sorted(scored)
@@ -61,6 +67,7 @@ def _trajectory_rows(scored):
         rows.append({"feature":feature,"observed_corr":float(np.corrcoef(va,vb)[0,1]),"rho_day_a":float(ra),"rho_day_b":float(rb),"conserved_direction":bool(np.sign(va[-1]-va[0])==np.sign(vb[-1]-vb[0]) and va[-1]!=va[0] and vb[-1]!=vb[0]),"abs_temporal_signal":float((abs(ra)+abs(rb))/2),"a_values":va.tolist(),"b_values":vb.tolist()})
     return pd.DataFrame(rows)
 
+
 def _temporal_null(rows):
     perms=list(itertools.permutations(range(len(EXPECTED_DAYS)))); identity=tuple(range(len(EXPECTED_DAYS))); null_perms=[p for p in perms if p != identity]; out=[]
     for r in rows.itertuples(index=False):
@@ -68,10 +75,12 @@ def _temporal_null(rows):
         out.append({"feature":r.feature,"n_exact_null_permutations":len(null),"null_q95":float(np.quantile(null,.95)),"null_q99":float(np.quantile(np.abs(null),.99)),"empirical_two_sided_p":float(p),"passes_null1":bool(obs>np.quantile(np.abs(null),.99) and p<=.05)})
     return pd.DataFrame(out)
 
+
 def _monotonic_series(rng,start,end):
     if start < end: interior=np.sort(rng.uniform(start,end,2))
     else: interior=np.sort(rng.uniform(end,start,2))[::-1]
     return np.array([start,*interior,end],float)
+
 
 def _monotonic_null(rows,seed):
     rng=np.random.default_rng(seed); out=[]
@@ -81,10 +90,39 @@ def _monotonic_null(rows,seed):
         out.append({"feature":r.feature,"n_monotonic_controls":N_MONOTONIC,"control_q95":float(np.quantile(null,.95)),"control_q99":float(np.quantile(null,.99)),"passes_null2":bool(r.observed_corr>np.quantile(null,.95))})
     return pd.DataFrame(out)
 
+
+def _canonical_gene_id(value: object) -> str:
+    """Canonicalize common gene-ID formatting differences without changing namespace."""
+    s = str(value).strip()
+    if "." in s and re.match(r"^ENSG\\d+\\.", s, flags=re.IGNORECASE):
+        s = s.split(".", 1)[0]
+    return s.upper()
+
+
+def _gene_id_kind(values) -> str:
+    ids = [str(v).strip() for v in values if str(v).strip()]
+    if not ids:
+        return "empty"
+    ensembl = sum(bool(re.match(r"^ENSG\\d+(?:\\.\\d+)?$", v, flags=re.IGNORECASE)) for v in ids)
+    numeric = sum(v.isdigit() for v in ids)
+    if ensembl / len(ids) >= 0.8:
+        return "ensembl_gene"
+    if numeric / len(ids) >= 0.8:
+        return "numeric_gene_id"
+    return "symbol_or_other"
+
+
+def _canonicalize_index(values) -> pd.Index:
+    return pd.Index([_canonical_gene_id(v) for v in values])
+
+
 def _perturbation_activity(network,condition):
     import decoupler as dc
     result={}
     audit=[]
+    network_targets = network["target"].astype(str)
+    network_raw = set(network_targets)
+    network_canonical = {_canonical_gene_id(v) for v in network_targets}
     for ds,path in PERTURBATION_FILES.items():
         row={"dataset":ds,"condition":condition,"path":str(path.relative_to(ROOT)),"status":"skipped","skip_reason":""}
         try:
@@ -105,19 +143,34 @@ def _perturbation_activity(network,condition):
         if sig is None:
             row["skip_reason"]="signature_unavailable"
             audit.append(row); continue
-        available=set(sig.index.astype(str)) & set(network["target"].astype(str))
-        row["n_signature_genes"] = int(len(sig))
-        row["n_shared_network_genes"] = int(len(available))
-        if not available:
-            row["skip_reason"]="no_shared_network_genes"
+        sig_ids = pd.Index(sig.index.astype(str))
+        sig_kind = _gene_id_kind(sig_ids)
+        sig_canonical = _canonicalize_index(sig_ids)
+        row["n_signature_genes"] = int(len(sig_ids))
+        row["gene_id_kind"] = sig_kind
+        row["n_unique_gene_ids"] = int(sig_ids.nunique())
+        row["n_network_targets"] = int(len(network_raw))
+        raw_shared = set(sig_ids) & network_raw
+        normalized_shared = set(sig_canonical) & network_canonical
+        row["n_shared_network_genes_raw"] = int(len(raw_shared))
+        row["n_shared_network_genes_normalized"] = int(len(normalized_shared))
+        row["normalization_action"] = "uppercase_and_ensembl_version_strip"
+        if not normalized_shared:
+            row["n_shared_network_genes"] = 0
+            row["skip_reason"]="no_shared_network_genes_after_normalization"
             audit.append(row); continue
-        net_use=network[network["target"].astype(str).isin(available)].copy()
+        # Re-index the signature by canonical IDs. Duplicate canonical IDs are averaged.
+        normalized_sig = pd.Series(sig.to_numpy(float), index=sig_canonical).groupby(level=0).mean()
+        net_use = network.copy()
+        net_use["target"] = network_targets.map(_canonical_gene_id)
+        net_use = net_use[net_use["target"].isin(normalized_shared)].copy()
+        row["n_shared_network_genes"] = int(len(normalized_shared))
         row["n_network_edges"] = int(len(net_use))
         row["n_network_sources"] = int(net_use["source"].nunique())
         if net_use.empty or net_use["source"].nunique()==0:
             row["skip_reason"]="empty_activity_network"
             audit.append(row); continue
-        cols=sorted(available); sample=pd.DataFrame([sig.reindex(cols).to_numpy(float)],columns=cols,index=[f"{ds}__{condition}"])
+        cols=sorted(normalized_shared); sample=pd.DataFrame([normalized_sig.reindex(cols).to_numpy(float)],columns=cols,index=[f"{ds}__{condition}"])
         try:
             acts,_=dc.mt.ulm(data=sample,net=net_use,tmin=1)
         except Exception as exc:
@@ -133,6 +186,7 @@ def _perturbation_activity(network,condition):
         audit.append(row)
     return result,audit
 
+
 def _context_control(progeny,dorothea,candidates):
     progeny_activity, progeny_audit = _perturbation_activity(progeny,"OSK")
     dorothea_activity, dorothea_audit = _perturbation_activity(dorothea,"OSK")
@@ -145,6 +199,7 @@ def _context_control(progeny,dorothea,candidates):
             rows.append({"representation":rep,"feature":feature,"activity_a":float(a),"activity_b":float(b),"concordant_direction":bool(direction),"worst_rank_fraction":float(frac),"known_delivery_confounded":bool(confound),"survives":bool(direction and frac<=.25 and not confound),"status":"ok"})
     columns=["representation","feature","activity_a","activity_b","concordant_direction","worst_rank_fraction","known_delivery_confounded","survives","status"]
     return pd.DataFrame(rows,columns=columns),datasets,audits
+
 
 def _bootstrap_stability(scored,rep,features,seed):
     rng=np.random.default_rng(seed); rows=[]
@@ -164,6 +219,7 @@ def _bootstrap_stability(scored,rep,features,seed):
         rows.append({"representation":rep,"feature":feature,"bootstrap_replicates":N_BOOTSTRAP,"stable_direction_fraction":float(same/total) if total else np.nan,"stable":bool(total and same/total>=.8)})
     return pd.DataFrame(rows)
 
+
 def _assign_tiers(detail,context,stability):
     context_cols=["representation","feature","survives","known_delivery_confounded"]
     context_safe=context.reindex(columns=context_cols,fill_value=False)
@@ -176,10 +232,12 @@ def _assign_tiers(detail,context,stability):
     out.loc[b,"tier"]="B"
     return out
 
+
 def _decision(tiered):
     a=tiered[tiered.tier=="A"]
     if a.empty: return {"decision":"CONFOUNDED_UNSUPPORTED","tier_a_n":0,"tier_b_n":0,"survival_rate":0.0,"reason":"No candidate passed temporal-order, monotonic-shape and stability gates."}
     b=tiered[tiered.tier=="B"]; rate=len(b)/len(a); decision="PROCEED" if rate>=.60 else "MIXED" if rate>=.30 else "CONFOUNDED_UNSUPPORTED"; return {"decision":decision,"tier_a_n":int(len(a)),"tier_b_n":int(len(b)),"survival_rate":float(rate),"reason":"Decision follows the fixed Stage 2.11C thresholds."}
+
 
 def run():
     OUT.mkdir(parents=True,exist_ok=True); progeny,dorothea=_activity_networks(); scored={"PROGENy":{},"DoRothEA":{}}; audits=[]
@@ -197,4 +255,3 @@ def run():
     (OUT/"stage2_11c_summary.json").write_text(json.dumps(summary,indent=2,ensure_ascii=False,default=str),encoding="utf-8"); return summary
 
 def main(): print(json.dumps(run(),indent=2,ensure_ascii=False,default=str))
-if __name__=="__main__": main()
