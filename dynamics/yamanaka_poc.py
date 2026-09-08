@@ -49,6 +49,8 @@ def condition_table(expr: pd.DataFrame, dataset: str) -> pd.DataFrame:
         if dataset == "GSE297233":
             if "CONTROL" in s or s.startswith("CTRL") or "D0" in s:
                 condition = "CONTROL"
+            elif "O4YRSK" in s:
+                condition = "OCT4YR_SK"
             elif "OCT4YR" in s and "SK" in s:
                 condition = "OCT4YR_SK"
             elif "OSK" in s:
