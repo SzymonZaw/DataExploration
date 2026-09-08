@@ -53,10 +53,11 @@ The following controls are locked **before any H3 similarity analysis**:
 
 | Role | Accession | Process | Expected local file | Locked input SHA-256 |
 |---|---|---|---|---|
-| H3-Control-1 | GSE3945 | acute serum-response / wound-healing program in human fibroblasts | `Data/GSE3945_*` (processed GEO series data) | to be recorded before analysis |
-| H3-Control-2 | GSE129486 | acute inflammatory cytokine response in human synovial fibroblasts | `Data/GSE129486_*` (processed GEO series data) | to be recorded before analysis |
+| H3-Control-1 | GSE3945 | acute serum-response / wound-healing program in human fibroblasts | `Data/GSE3945_series_matrix.txt.gz` | `a79ec8c7b5bb88742a43bba7495856dd6a3d3e82b802588ea58d9773ef0598eb` |
+| H3-Control-2a | GSE129486 | acute inflammatory cytokine response in human synovial fibroblasts — gene TPM matrix | `Data/GSE129486_rnaseq-data-1_gene-tpm.tsv.gz` | `6e3d7860f4f38d95830a15b8dd570d58f9226170df6002343e432a05c96fcbf0` |
+| H3-Control-2b | GSE129486 | metadata paired with the gene TPM matrix | `Data/GSE129486_rnaseq-data-1_metadata.tsv.gz` | `78a60e353461ab819672e478a9f38b20822fdfc493a1773677ddef3eb167ff04` |
 
-The input SHA-256 values are intentionally populated only after the exact downloaded files are fixed locally and before any H3 statistic is computed.
+These hashes were recorded from the exact local resources acquired by `dynamics/download_h3_controls.py`, before any H3 similarity analysis.
 
 ## 7. Historical controls — retained, not primary
 
