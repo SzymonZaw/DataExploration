@@ -22,9 +22,6 @@ OUT = ROOT / "results" / "Dynamics" / "stage2_11c_h3_control_redesign"
 MATRIX = DATA / "GSE263713_raw_counts.tsv.gz"
 EXPECTED_SHA = "8ce1e16a0039d93449e70aa6e827bbc8510a9b15dfbb78dc920cc2a2de5615a6"
 
-# Conservative technical gate: the candidate should retain most of the locked
-# network target universe. These are technical compatibility thresholds, not
-# biological effect thresholds.
 MIN_MAPPING_RATE = 0.90
 MIN_PROGENY_OVERLAP = 0.80
 MIN_DOROTHEA_OVERLAP = 0.80
@@ -50,8 +47,8 @@ def classify_namespace(ids: list[str]) -> str:
     clean = [str(x).strip() for x in ids if str(x).strip()]
     if not clean:
         return "unknown"
-    ensembl = sum(bool(re.fullmatch(r"ENSG\\d+(?:\\.\\d+)?", x.upper())) for x in clean)
-    numeric = sum(bool(re.fullmatch(r"\\d+", x)) for x in clean)
+    ensembl = sum(bool(re.fullmatch(r"ENSG\d+(?:\.\d+)?", x.upper())) for x in clean)
+    numeric = sum(bool(re.fullmatch(r"\d+", x)) for x in clean)
     if ensembl / len(clean) >= 0.80:
         return "ensembl_gene"
     if numeric / len(clean) >= 0.80:
@@ -60,12 +57,8 @@ def classify_namespace(ids: list[str]) -> str:
 
 
 def map_to_hgnc(ids: list[str], namespace: str) -> tuple[dict[str, str], int]:
-    """Return input-id -> HGNC symbol and number of unique input IDs."""
     clean = sorted(set(str(x).split(".", 1)[0].strip().upper() for x in ids if str(x).strip()))
     if namespace == "gene_symbol_or_other":
-        # Do not silently convert arbitrary identifiers. Only accept values
-        # that look like canonical HGNC symbols; mapping quality is checked by
-        # network overlap below.
         mapping = {x: x for x in clean if re.fullmatch(r"[A-Z][A-Z0-9-]{1,14}", x)}
         return mapping, len(clean)
 
@@ -135,30 +128,31 @@ def main() -> int:
     with gzip.open(MATRIX, "rt", encoding="utf-8", errors="replace") as fh:
         header = next(csv.reader([fh.readline().rstrip("\n")], delimiter="\t"))
         first_rows = []
-        for _ in range(20):
-            line = fh.readline()
+        all_gene_ids = []
+        for line_no, line in enumerate(fh):
             if not line:
                 break
-            first_rows.append(next(csv.reader([line.rstrip("\n")], delimiter="\t")))
+            row = next(csv.reader([line.rstrip("\n")], delimiter="\t"), [])
+            if not row:
+                continue
+            all_gene_ids.append(row[0])
+            if len(first_rows) < 20:
+                first_rows.append(row)
 
     # featureCounts output contains Geneid, Chr, Start, End, Strand, Length;
     # sample columns have the locked GSE263713 -TP-<hour> naming convention.
-    sample_cols = [x for x in header if re.search(r"-TP-\\d+(?:\\D|$)", str(x))]
+    sample_cols = [x for x in header if re.search(r"-TP-\d+(?:\D|$)", str(x))]
     annotation_cols = [x for x in header if x not in sample_cols]
-    gene_ids = [row[0] for row in first_rows if row]
-    namespace = classify_namespace(gene_ids)
+    namespace = classify_namespace(all_gene_ids)
 
     numeric_values = []
+    pos = {name: i for i, name in enumerate(header)}
     for row in first_rows:
-        if not row:
-            continue
-        # Only sample columns participate in the numeric matrix gate.
-        pos = {name: i for i, name in enumerate(header)}
         numeric_values.extend(row[pos[c]] for c in sample_cols if pos[c] < len(row))
     numeric = sum(1 for x in numeric_values if str(x).strip() and is_number(x))
     nonempty = sum(1 for x in numeric_values if str(x).strip())
 
-    mapping, n_unique_input = map_to_hgnc(gene_ids, namespace)
+    mapping, n_unique_input = map_to_hgnc(all_gene_ids, namespace)
     mapped_symbols = list(mapping.values())
     collision_count = len(mapped_symbols) - len(set(mapped_symbols))
     symbols = set(mapped_symbols)
@@ -173,10 +167,9 @@ def main() -> int:
             "network_overlap_fraction": len(shared) / len(net) if net else 0.0,
         }
 
-    # Validate the full sample naming structure against the previous audit.
     parsed = []
     for sample in sample_cols:
-        m = re.match(r"^([^-]+)-TP-(\\d+(?:\\.\\d+)?)$", str(sample))
+        m = re.match(r"^([^-]+)-TP-(\d+(?:\.\d+)?)$", str(sample))
         if m:
             parsed.append((m.group(1), float(m.group(2))))
     individuals = sorted({x[0] for x in parsed})
@@ -186,6 +179,7 @@ def main() -> int:
     report["matrix"] = {
         "orientation": "gene_x_sample",
         "gene_annotation_columns": annotation_cols,
+        "n_gene_rows": len(all_gene_ids),
         "n_sample_columns": len(sample_cols),
         "sample_id_examples": sample_cols[:10],
         "numeric_fraction_first_20_rows": numeric / nonempty if nonempty else 0.0,
