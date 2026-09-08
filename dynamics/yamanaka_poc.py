@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +25,60 @@ FILES = {
 
 def _clean_sample_name(value: object) -> str:
     return str(value).strip().replace(" ", "_")
+
+
+def _gene_id_kind(values) -> str:
+    ids = [str(v).strip() for v in values if str(v).strip()]
+    if not ids:
+        return "empty"
+    ensembl = sum(bool(re.match(r"^ENSG\d+(?:\.\d+)?$", v, flags=re.IGNORECASE)) for v in ids)
+    numeric = sum(v.isdigit() for v in ids)
+    if ensembl / len(ids) >= 0.8:
+        return "ensembl_gene"
+    if numeric / len(ids) >= 0.8:
+        return "numeric_gene_id"
+    return "symbol_or_other"
+
+
+def _canonical_ensembl(value: object) -> str:
+    s = str(value).strip()
+    if re.match(r"^ENSG\d+(?:\.\d+)?$", s, flags=re.IGNORECASE):
+        s = s.split(".", 1)[0]
+    return s.upper()
+
+
+def _map_ensembl_to_symbols(expr: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Map human Ensembl row IDs to HGNC symbols for downstream gene networks."""
+    ids = pd.Index(expr.index.astype(str))
+    if _gene_id_kind(ids) != "ensembl_gene":
+        return expr, {"mapping_action": "not_needed", "n_mapped_genes": 0, "n_unmapped_genes": 0}
+    try:
+        import mygene
+    except ImportError as exc:
+        raise RuntimeError("GSE297233 uses Ensembl IDs; install mygene from requirements-ai.txt.") from exc
+    clean = tuple(_canonical_ensembl(v) for v in ids)
+    result = _query_ensembl_symbols(clean)
+    mapping = {}
+    for row in result:
+        if row.get("notfound"):
+            continue
+        q, symbol = row.get("query"), row.get("symbol")
+        if q and symbol:
+            mapping[str(q).upper()] = str(symbol).upper()
+    symbols = [mapping.get(v, "") for v in clean]
+    keep = np.array([bool(v) for v in symbols])
+    if not keep.any():
+        return expr.iloc[0:0].copy(), {"mapping_action": "ensembl_to_symbol", "n_mapped_genes": 0, "n_unmapped_genes": int(len(ids))}
+    mapped = expr.loc[keep].copy()
+    mapped.index = pd.Index(np.asarray(symbols)[keep])
+    mapped = mapped.groupby(level=0).mean()
+    return mapped, {"mapping_action": "ensembl_to_symbol", "n_mapped_genes": int(len(mapping)), "n_unmapped_genes": int(len(ids) - len(mapping))}
+
+
+@lru_cache(maxsize=8)
+def _query_ensembl_symbols(ids: tuple[str, ...]):
+    import mygene
+    return tuple(mygene.MyGeneInfo().querymany(list(ids), scopes="ensembl.gene", fields="symbol", species="human", as_dataframe=False, returnall=False, step=1000, verbose=False))
 
 
 def load_expression(path: Path) -> tuple[pd.DataFrame, dict]:
@@ -79,7 +135,11 @@ def _signature(expr: pd.DataFrame, labels: pd.Series, condition: str) -> pd.Seri
     b = expr.loc[:, labels.index[keep & (labels == "CONTROL")]]
     if a.shape[1] == 0 or b.shape[1] == 0:
         return None
-    return np.log1p(a).mean(axis=1) - np.log1p(b).mean(axis=1)
+    sig = np.log1p(a).mean(axis=1) - np.log1p(b).mean(axis=1)
+    if _gene_id_kind(sig.index) == "ensembl_gene":
+        mapped, _ = _map_ensembl_to_symbols(sig.to_frame("effect"))
+        return mapped["effect"]
+    return sig
 
 
 def _top_genes(sig: pd.Series, n: int = 20) -> tuple[list[str], list[str]]:
