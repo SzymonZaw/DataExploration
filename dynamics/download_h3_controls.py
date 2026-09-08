@@ -1,10 +1,7 @@
-"""Download the prospectively locked Stage 2.11C H3 control inputs.
+"""Download prospectively selected Stage 2.11C H3/H2 control inputs.
 
-This script performs acquisition only. It does not compute H3 similarity statistics.
-It downloads the exact processed resources declared in the H3 manifest and writes
-SHA-256 checksums so the later technical gate can lock the inputs before analysis.
+Acquisition only. No H3 similarity statistics are computed here.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -12,19 +9,21 @@ import hashlib
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-
 CONTROLS = {
-    "GSE3945": {
-        "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE3nnn/GSE3945/matrix/GSE3945_series_matrix.txt.gz",
-        "filename": "GSE3945_series_matrix.txt.gz",
+    "GSE263713": {
+        "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE263nnn/GSE263713/suppl/GSE263713_raw_counts.tsv.gz",
+        "filename": "GSE263713_raw_counts.tsv.gz",
+        "role": "H3 orthogonal temporal candidate",
     },
     "GSE129486_gene_tpm": {
         "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE129nnn/GSE129486/suppl/GSE129486_rnaseq-data-1_gene-tpm.tsv.gz",
         "filename": "GSE129486_rnaseq-data-1_gene-tpm.tsv.gz",
+        "role": "H2 inflammatory nuisance control",
     },
     "GSE129486_metadata": {
         "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE129nnn/GSE129486/suppl/GSE129486_rnaseq-data-1_metadata.tsv.gz",
         "filename": "GSE129486_rnaseq-data-1_metadata.tsv.gz",
+        "role": "H2 inflammatory nuisance control metadata",
     },
 }
 
@@ -63,7 +62,7 @@ def main() -> int:
             download(item["url"], destination)
         digest = sha256(destination)
         checksum_lines.append(f"{digest}  {destination.as_posix()}")
-        print(f"SHA256 {name}: {digest}")
+        print(f"SHA256 {name}: {digest}  ROLE={item['role']}")
 
     checksum_path = args.data_dir / "H3_CONTROL_INPUTS.sha256"
     checksum_path.write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
