@@ -1,0 +1,46 @@
+{
+  "protocol": "STAGE_2_11C_H3_CONTROL_REDESIGN_PROTOCOL.md",
+  "manifest": "STAGE_2_11C_H3_CONTROL_REDESIGN_MANIFEST.md",
+  "status": "locked_before_analysis",
+  "analysis_performed": false,
+  "controls": [
+    {
+      "role": "H3-Control-1",
+      "accession": "GSE3945",
+      "process": "acute serum-response / wound-healing program in human fibroblasts",
+      "files": [
+        {
+          "path": "Data/GSE3945_series_matrix.txt.gz",
+          "sha256": "a79ec8c7b5bb88742a43bba7495856dd6a3d3e82b802588ea58d9773ef0598eb"
+        }
+      ]
+    },
+    {
+      "role": "H3-Control-2",
+      "accession": "GSE129486",
+      "process": "acute inflammatory cytokine response in human synovial fibroblasts",
+      "files": [
+        {
+          "path": "Data/GSE129486_rnaseq-data-1_gene-tpm.tsv.gz",
+          "sha256": "6e3d7860f4f38d95830a15b8dd570d58f9226170df6002343e432a05c96fcbf0"
+        },
+        {
+          "path": "Data/GSE129486_rnaseq-data-1_metadata.tsv.gz",
+          "sha256": "78a60e353461ab819672e478a9f38b20822fdfc493a1773677ddef3eb167ff04"
+        }
+      ]
+    }
+  ],
+  "decision_parameters": {
+    "delta_H3": 0.10,
+    "one_sided_empirical_null_p": 0.05,
+    "feature_level_bh_q": 0.05,
+    "minimum_independent_process_classes": 2,
+    "attainable_p_resolution_failure_state": "H3_UNRESOLVED"
+  },
+  "provenance": {
+    "acquisition_script": "dynamics/download_h3_controls.py",
+    "historical_controls_retired_from_primary": ["GSE175533", "GSE179848"],
+    "purpose": "Machine-readable lock of exact input resources before H3 similarity analysis. This file contains no H3 results."
+  }
+}
