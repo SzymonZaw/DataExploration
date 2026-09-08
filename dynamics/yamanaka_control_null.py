@@ -82,20 +82,61 @@ def _monotonic_null(rows,seed):
     return pd.DataFrame(out)
 
 def _perturbation_activity(network,condition):
-    import decoupler as dc; result={}
+    import decoupler as dc
+    result={}
+    audit=[]
     for ds,path in PERTURBATION_FILES.items():
-        X,_=load_expression(path); labels=condition_table(X,ds).set_index("sample")["condition"]; sig=_signature(X,labels,condition)
-        if sig is None: continue
+        row={"dataset":ds,"condition":condition,"path":str(path.relative_to(ROOT)),"status":"skipped","skip_reason":""}
+        try:
+            X,_=load_expression(path)
+        except Exception as exc:
+            row["skip_reason"]="load_expression_failed:" + type(exc).__name__
+            row["error"] = str(exc)
+            audit.append(row); continue
+        try:
+            labels=condition_table(X,ds).set_index("sample")["condition"]
+            row["n_samples"] = int(X.shape[1])
+            row["condition_counts"] = json.dumps(labels.value_counts().to_dict(), sort_keys=True)
+            sig=_signature(X,labels,condition)
+        except Exception as exc:
+            row["skip_reason"]="signature_failed:" + type(exc).__name__
+            row["error"] = str(exc)
+            audit.append(row); continue
+        if sig is None:
+            row["skip_reason"]="signature_unavailable"
+            audit.append(row); continue
         available=set(sig.index.astype(str)) & set(network["target"].astype(str))
-        if not available: continue
+        row["n_signature_genes"] = int(len(sig))
+        row["n_shared_network_genes"] = int(len(available))
+        if not available:
+            row["skip_reason"]="no_shared_network_genes"
+            audit.append(row); continue
         net_use=network[network["target"].astype(str).isin(available)].copy()
-        if net_use.empty or net_use["source"].nunique()==0: continue
+        row["n_network_edges"] = int(len(net_use))
+        row["n_network_sources"] = int(net_use["source"].nunique())
+        if net_use.empty or net_use["source"].nunique()==0:
+            row["skip_reason"]="empty_activity_network"
+            audit.append(row); continue
         cols=sorted(available); sample=pd.DataFrame([sig.reindex(cols).to_numpy(float)],columns=cols,index=[f"{ds}__{condition}"])
-        acts,_=dc.mt.ulm(data=sample,net=net_use,tmin=1); result[ds]=acts.iloc[0].apply(float)
-    return result
+        try:
+            acts,_=dc.mt.ulm(data=sample,net=net_use,tmin=1)
+        except Exception as exc:
+            row["skip_reason"]="decoupler_failed:" + type(exc).__name__
+            row["error"] = str(exc)
+            audit.append(row); continue
+        if acts.empty:
+            row["skip_reason"]="decoupler_empty_result"
+            audit.append(row); continue
+        result[ds]=acts.iloc[0].apply(float)
+        row["status"]="scored"
+        row["n_activity_features"] = int(len(result[ds]))
+        audit.append(row)
+    return result,audit
 
 def _context_control(progeny,dorothea,candidates):
-    activity={"PROGENy":_perturbation_activity(progeny,"OSK"),"DoRothEA":_perturbation_activity(dorothea,"OSK")}; rows=[]; datasets={}
+    progeny_activity, progeny_audit = _perturbation_activity(progeny,"OSK")
+    dorothea_activity, dorothea_audit = _perturbation_activity(dorothea,"OSK")
+    activity={"PROGENy":progeny_activity,"DoRothEA":dorothea_activity}; audits=progeny_audit+dorothea_audit; rows=[]; datasets={}
     for rep,acts in activity.items():
         datasets[rep]=sorted(acts); n_features=max((len(s) for s in acts.values()),default=0)
         for feature in candidates.get(rep,[]):
@@ -103,7 +144,7 @@ def _context_control(progeny,dorothea,candidates):
             names=sorted(acts); a,b=acts[names[0]][feature],acts[names[1]][feature]; direction=np.sign(a)==np.sign(b) and a!=0 and b!=0; ranks=[s.abs().sort_values(ascending=False).index.tolist().index(feature)+1 for s in acts.values()]; frac=max(ranks)/max(n_features,1); confound=(rep=="PROGENy" and feature in CONFOUNDER_PROGENY) or (rep=="DoRothEA" and feature in CONFOUNDER_TF)
             rows.append({"representation":rep,"feature":feature,"activity_a":float(a),"activity_b":float(b),"concordant_direction":bool(direction),"worst_rank_fraction":float(frac),"known_delivery_confounded":bool(confound),"survives":bool(direction and frac<=.25 and not confound),"status":"ok"})
     columns=["representation","feature","activity_a","activity_b","concordant_direction","worst_rank_fraction","known_delivery_confounded","survives","status"]
-    return pd.DataFrame(rows,columns=columns),datasets
+    return pd.DataFrame(rows,columns=columns),datasets,audits
 
 def _bootstrap_stability(scored,rep,features,seed):
     rng=np.random.default_rng(seed); rows=[]
@@ -150,9 +191,9 @@ def run():
     for rep,values in scored.items():
         r=_trajectory_rows(values)
         if not r.empty: r["representation"]=rep; frames.append(r); candidates[rep]=r.feature.tolist()
-    trajectory=pd.concat(frames,ignore_index=True) if frames else pd.DataFrame(); null1=_temporal_null(trajectory) if not trajectory.empty else pd.DataFrame(); null2=_monotonic_null(trajectory,SEED+1) if not trajectory.empty else pd.DataFrame(); detail=trajectory.merge(null1,on="feature",how="left").merge(null2,on="feature",how="left"); context,context_datasets=_context_control(progeny,dorothea,candidates); stability=pd.concat([_bootstrap_stability(scored["PROGENy"],"PROGENy",candidates.get("PROGENy",[]),SEED+2),_bootstrap_stability(scored["DoRothEA"],"DoRothEA",candidates.get("DoRothEA",[]),SEED+3)],ignore_index=True); tiered=_assign_tiers(detail,context,stability) if not detail.empty else pd.DataFrame(); decision=_decision(tiered) if not tiered.empty else {"decision":"INCONCLUSIVE","reason":"No complete two-dataset temporal activity matrix was available."}
-    trajectory.to_csv(OUT/"01_candidate_trajectories.csv",index=False); null1.to_csv(OUT/"02_null1_temporal_order.csv",index=False); null2.to_csv(OUT/"03_null2_monotonic_shape.csv",index=False); context.to_csv(OUT/"04_context_control_OSK.csv",index=False); stability.to_csv(OUT/"05_candidate_stability.csv",index=False); tiered.to_csv(OUT/"06_candidate_tiers.csv",index=False)
-    summary={"status":"ok","protocol_hash":_protocol_hash(),"seed":SEED,"n_monotonic_controls":N_MONOTONIC,"n_bootstrap":N_BOOTSTRAP,"dataset_audit":audits,"context_control_datasets":context_datasets,"decision":decision,"interpretation_guardrail":"Stage 2.11C is a falsification gate. Passing supports candidate temporal regulators; it does not establish causality, lineage, or a molecular mechanism.","important_limitations":["The temporal-order null excludes the observed ordering from the exact permutation reference; with four days there are 23 null permutations and the minimum +1-corrected empirical p-value is 1/24 ≈ 0.0417.","GSE304042 is a heterologous biological/context control, not a clean Sendai-only control because cell type and experimental design differ.","Pseudobulk cannot establish single-cell lineage or cell-level transition dynamics."]}
+    trajectory=pd.concat(frames,ignore_index=True) if frames else pd.DataFrame(); null1=_temporal_null(trajectory) if not trajectory.empty else pd.DataFrame(); null2=_monotonic_null(trajectory,SEED+1) if not trajectory.empty else pd.DataFrame(); detail=trajectory.merge(null1,on="feature",how="left").merge(null2,on="feature",how="left"); context,context_datasets,perturbation_audit=_context_control(progeny,dorothea,candidates); stability=pd.concat([_bootstrap_stability(scored["PROGENy"],"PROGENy",candidates.get("PROGENy",[]),SEED+2),_bootstrap_stability(scored["DoRothEA"],"DoRothEA",candidates.get("DoRothEA",[]),SEED+3)],ignore_index=True); tiered=_assign_tiers(detail,context,stability) if not detail.empty else pd.DataFrame(); decision=_decision(tiered) if not tiered.empty else {"decision":"INCONCLUSIVE","reason":"No complete two-dataset temporal activity matrix was available."}
+    trajectory.to_csv(OUT/"01_candidate_trajectories.csv",index=False); null1.to_csv(OUT/"02_null1_temporal_order.csv",index=False); null2.to_csv(OUT/"03_null2_monotonic_shape.csv",index=False); context.to_csv(OUT/"04_context_control_OSK.csv",index=False); stability.to_csv(OUT/"05_candidate_stability.csv",index=False); tiered.to_csv(OUT/"06_candidate_tiers.csv",index=False); pd.DataFrame(perturbation_audit).to_csv(OUT/"07_perturbation_activity_audit.csv",index=False)
+    summary={"status":"ok","protocol_hash":_protocol_hash(),"seed":SEED,"n_monotonic_controls":N_MONOTONIC,"n_bootstrap":N_BOOTSTRAP,"dataset_audit":audits,"context_control_datasets":context_datasets,"perturbation_activity_audit":perturbation_audit,"decision":decision,"interpretation_guardrail":"Stage 2.11C is a falsification gate. Passing supports candidate temporal regulators; it does not establish causality, lineage, or a molecular mechanism.","important_limitations":["The temporal-order null excludes the observed ordering from the exact permutation reference; with four days there are 23 null permutations and the minimum +1-corrected empirical p-value is 1/24 ≈ 0.0417.","GSE304042 is a heterologous biological/context control, not a clean Sendai-only control because cell type and experimental design differ.","Pseudobulk cannot establish single-cell lineage or cell-level transition dynamics."]}
     (OUT/"stage2_11c_summary.json").write_text(json.dumps(summary,indent=2,ensure_ascii=False,default=str),encoding="utf-8"); return summary
 
 def main(): print(json.dumps(run(),indent=2,ensure_ascii=False,default=str))
