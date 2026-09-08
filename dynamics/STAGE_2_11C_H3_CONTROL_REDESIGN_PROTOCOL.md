@@ -182,6 +182,8 @@ Before any H3 statistic is computed, persist a machine-readable audit containing
 - preprocessing parameters;
 - representation/network versions.
 
+For the legacy GSE3945 microarray resource, missing expression cells are permitted at the technical-validation stage. The locked structural criterion is that at least **90% of non-missing expression cells in the first 200 expression rows are numeric**, while missingness is reported explicitly. This is a data-format gate, not a biological or inferential decision threshold.
+
 A parser repair is not considered sufficient evidence of data validity. The reconstructed matrix structure must be independently checked against the source metadata.
 
 ## 11. Historical boundary
