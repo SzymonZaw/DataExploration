@@ -63,8 +63,18 @@ def _trajectory_arrays(item):
 def training_statistics(train, max_genes):
     arrays = [_trajectory_arrays(item)[1] for item in train.values()]
     raw = np.vstack(arrays)
-    med = np.nanmedian(np.where(np.isfinite(raw), raw, np.nan), axis=0)
-    med = np.where(np.isfinite(med), med, 0.0)
+
+    # Explicitly identify features that are missing in every training sample.
+    # np.nanmedian emits RuntimeWarning for such columns; the frozen protocol
+    # already replaced those medians with 0.0 immediately afterwards. Computing
+    # the median only on columns with at least one finite value preserves the
+    # exact downstream values while making this expected edge case explicit.
+    finite_columns = np.isfinite(raw).any(axis=0)
+    med = np.zeros(raw.shape[1], dtype=float)
+    if finite_columns.any():
+        finite_raw = np.where(np.isfinite(raw[:, finite_columns]), raw[:, finite_columns], np.nan)
+        med[finite_columns] = np.nanmedian(finite_raw, axis=0)
+
     pooled = np.vstack([np.where(np.isfinite(X), X, med) for X in arrays])
     var = np.var(pooled, axis=0)
     keep = np.argsort(var)[::-1][:min(max_genes, pooled.shape[1])]
