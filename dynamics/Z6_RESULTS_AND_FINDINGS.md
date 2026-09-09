@@ -168,13 +168,25 @@ The current result shifts the Z6 question from:
 
 This is consistent with the broader thesis objective of separating biological state from context-dependent and technical effects rather than treating every temporally predictive signal as biological state.
 
-## 8. Next required audit before extending the model
+## 8. Phase 0.1 technical audit closure
 
-Before architecture expansion or threshold relaxation, the next technical check is the `All-NaN` warning observed during Phase 0.1 preprocessing in `model_benchmark.py`. The warning must be audited to establish whether all-NaN feature columns are harmlessly excluded/imputed or can influence training, scaling or prediction.
+During the initial Phase 0.1 run, `model_benchmark.py` emitted `RuntimeWarning: All-NaN slice encountered` from `training_statistics()` while computing the feature-wise median used for training-set imputation.
 
-This audit must not change the frozen predictive-support rule. If the NaN handling is confirmed benign, Phase 0.1 can be treated as a stable diagnostic result and the next scientific step should address representation/context dependence rather than simply increasing model complexity.
+The warning source was identified as columns that were entirely non-finite within the training trajectories. The implementation was changed to detect all-NaN columns explicitly, compute the median only for columns with at least one finite value, and retain the existing downstream fallback of `0.0` for all-NaN columns.
 
-## 9. Provenance
+The corrected benchmark was rerun with the complete Phase 0.1 protocol. The warning disappeared and **all reported numerical results remained identical** to the pre-fix run, including RMSE values, baseline improvements, q05 statistics, permutation p-values and predictive-support decisions for every system/model combination.
+
+Therefore the warning was a preprocessing diagnostic artifact and did not affect the Phase 0.1 scientific conclusions. The predictive-support rule, model architecture, preprocessing protocol, baselines, validation branches and dataset inclusion were not relaxed or changed.
+
+Phase 0.1 is therefore considered **technically closed and stable**, while its scientific interpretation remains subject to the limitations documented above.
+
+## 9. Next required audit before extending the model
+
+With the NaN warning resolved, the next step should **not** be architecture expansion or threshold relaxation. The scientifically relevant follow-up is to investigate representation/context dependence and the unresolved biological-specificity problem (Z4/H3), especially whether the positive GSE67462 prediction reflects transferable biological state information or system-specific temporal/context structure.
+
+Any follow-up must preserve the frozen Phase 0/0.1 results as a reference point and must not retroactively redefine predictive support.
+
+## 10. Provenance
 
 Primary machine-readable outputs from Phase 0.1 are stored under:
 
