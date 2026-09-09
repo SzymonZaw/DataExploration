@@ -5,10 +5,11 @@ Diagnostic only. It does not modify frozen Z6 predictive support.
 Primary representation: promoter-associated peak burden, defined as the sum of
 peak scores whose peak midpoint falls within +/-2 kb of an annotated TSS.
 This deliberately avoids arbitrary nearest-gene assignment for distal peaks.
-The analysis is temporal: each modality is compared with the GSE67462 common
-branch trajectory over day 0,1,3,5,7,11,15,18. iPSC is retained in parsing
-but is not used in the primary trajectory test because the expression audit
-has no validated iPSC time point.
+The analysis is temporal: GSE67520 day labels d0,d1,d3,d5,d7,d11,d15,d18
+are explicitly mapped to the corresponding GSE67462 hour grid
+0,24,72,120,168,264,360,432. iPSC is retained in parsing but is not used in
+the primary trajectory test because the expression audit has no validated iPSC
+time point.
 """
 from __future__ import annotations
 
@@ -35,6 +36,16 @@ MODALITIES = {
     "rnapii": ("RNAPII", "bed"),
 }
 TIME_RE = re.compile(r"_(d(?:0|1|3|5|7|11|15|18)|ipsc)_peaks", re.I)
+DAY_TO_HOURS = {
+    0: 0.0,
+    1: 24.0,
+    3: 72.0,
+    5: 120.0,
+    7: 168.0,
+    11: 264.0,
+    15: 360.0,
+    18: 432.0,
+}
 DEFAULT_GTF = "Data/GSE67520/mm9.refGene.gtf.gz"
 GTF_URL = "https://hgdownload.cse.ucsc.edu/goldenpath/mm9/bigZips/genes/mm9.refGene.gtf.gz"
 PROMOTER_HALF_WIDTH = 2000
@@ -97,7 +108,6 @@ def _load_tss(gtf: Path):
 
 
 def _parse_peak_file(path: Path):
-    is_broad = path.name.lower().endswith("broadpeak.gz")
     rows = []
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8") as fh:
@@ -158,11 +168,11 @@ def _discover_files(root: Path):
                 m = TIME_RE.search(p.name)
                 if m:
                     tag = m.group(1).lower()
-                    time = "iPSC" if tag == "ipsc" else int(tag[1:])
+                    time = "iPSC" if tag == "ipsc" else DAY_TO_HOURS[int(tag[1:])]
                     result[key].append((time, p))
                 break
     for key in result:
-        result[key].sort(key=lambda x: (x[0] == "iPSC", x[0] if isinstance(x[0], int) else 999))
+        result[key].sort(key=lambda x: (x[0] == "iPSC", x[0] if isinstance(x[0], (int, float)) else 999))
     return result
 
 
@@ -198,7 +208,7 @@ def _trajectory_concordance(expr, modality_values):
     genes = expr.columns
     rows = []
     for modality in sorted(set(m for m, _, _ in modality_values)):
-        entries = [(t, v) for m, t, v in modality_values if m == modality and isinstance(t, int)]
+        entries = [(t, v) for m, t, v in modality_values if m == modality and isinstance(t, (int, float, np.integer, np.floating))]
         entries = sorted(entries, key=lambda x: x[0])
         times = [t for t, _ in entries if t in expr.index]
         if len(times) < 5:
@@ -219,7 +229,10 @@ def _permutation_test(expr, modality_values, n_permutations, seed):
     rng = np.random.default_rng(seed)
     rows = []
     for modality in sorted(set(m for m, _, _ in modality_values)):
-        entries = [(t, v) for m, t, v in modality_values if m == modality and isinstance(t, int) and t in expr.index]
+        entries = [(t, v) for m, t, v in modality_values
+                   if m == modality
+                   and isinstance(t, (int, float, np.integer, np.floating))
+                   and t in expr.index]
         entries.sort(key=lambda x: x[0])
         if len(entries) < 5:
             continue
@@ -233,7 +246,23 @@ def _permutation_test(expr, modality_values, n_permutations, seed):
             null.append(_spearman(expr.loc[times, genes].to_numpy().ravel(), mod_df.loc[perm, genes].to_numpy().ravel()))
         null = np.asarray([x for x in null if np.isfinite(x)])
         p = float((1 + np.sum(null >= observed)) / (1 + len(null))) if len(null) else np.nan
-        rows.append({"modality": modality, "observed_global_spearman": observed, "null_mean": float(np.mean(null)) if len(null) else np.nan, "null_q95": float(np.quantile(null, 0.95)) if len(null) else np.nan, "permutation_p": p, "n_permutations": len(null)})
+        rows.append({
+            "modality": modality,
+            "permutation_observed_global_spearman": observed,
+            "null_mean": float(np.mean(null)) if len(null) else np.nan,
+            "null_q95": float(np.quantile(null, 0.95)) if len(null) else np.nan,
+            "permutation_p": p,
+            "n_permutations": len(null),
+        })
+    if not rows:
+        return pd.DataFrame(columns=[
+            "modality",
+            "permutation_observed_global_spearman",
+            "null_mean",
+            "null_q95",
+            "permutation_p",
+            "n_permutations",
+        ])
     return pd.DataFrame(rows)
 
 
