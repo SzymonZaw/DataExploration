@@ -49,7 +49,13 @@ def read_matrix(path: Path) -> pd.DataFrame:
     d = pd.read_csv(path, sep=sep, compression=compression, low_memory=False)
     x = d.set_index(d.columns[0]).apply(pd.to_numeric, errors="coerce").fillna(0.0)
     x.index = x.index.astype(str).str.strip().str.upper()
-    return x.groupby(level=0).sum()
+    x = x.groupby(level=0).sum()
+    if x.shape[1] == 0:
+        raise ValueError(
+            "Expression matrix has no sample columns after using the first column as gene ID. "
+            f"Input: {path}"
+        )
+    return x
 
 
 def parse_days(spec: str, columns: pd.Index) -> dict[str, float]:
@@ -77,9 +83,28 @@ def parse_donors(spec: str, days: dict[str, float]) -> dict[str, list[str]]:
     return out
 
 
+def library_sizes(x: pd.DataFrame) -> pd.Series:
+    lib = x.sum(axis=0, dtype=float)
+    if not np.isfinite(lib.to_numpy()).all():
+        bad = lib[~np.isfinite(lib)]
+        raise ValueError(f"Non-finite library sizes detected: {bad.to_dict()}")
+    if (lib <= 0).any():
+        bad = lib[lib <= 0]
+        raise ValueError(
+            "Non-positive library size detected. This means the selected sample columns "
+            "contain no positive counts and cannot be normalized to CPM: "
+            f"{bad.to_dict()}"
+        )
+    return lib
+
+
 def log_cpm(x: pd.DataFrame) -> pd.DataFrame:
-    lib = x.sum(axis=0).replace(0, np.nan)
-    return np.log2(x.div(lib, axis=1) * 1e6 + 1.0)
+    lib = library_sizes(x)
+    out = np.log2(x.div(lib, axis=1) * 1e6 + 1.0)
+    if not np.isfinite(out.to_numpy(dtype=float, copy=False)).all():
+        bad_cols = out.columns[~np.isfinite(out.to_numpy(dtype=float, copy=False)).all(axis=0)].tolist()
+        raise ValueError(f"Non-finite log2(CPM+1) values detected in columns: {bad_cols}")
+    return out
 
 
 def sample_log_cpm(x: pd.DataFrame) -> pd.DataFrame:
@@ -108,13 +133,21 @@ def _pc1_from_time_covariance(matrix: np.ndarray) -> np.ndarray:
     return pc1
 
 
-def metrics(lcpm: pd.DataFrame, days: list[float]) -> dict:
+def metrics(lcpm: pd.DataFrame, days: list[float], label: str = "trajectory") -> dict:
     t = np.asarray(days, dtype=float)
     matrix = lcpm.to_numpy(dtype=float, copy=True)
     finite_rows = np.isfinite(matrix).all(axis=1)
+    n_total = int(matrix.shape[0])
+    n_finite = int(finite_rows.sum())
+    if n_finite == 0:
+        finite_by_column = np.isfinite(matrix).sum(axis=0).tolist()
+        raise ValueError(
+            f"No finite gene trajectories available for {label}. "
+            f"shape={matrix.shape}; finite_rows={n_finite}/{n_total}; "
+            f"finite_values_by_timepoint={finite_by_column}. "
+            "This indicates a normalization/input problem upstream of PC1, not an SVD/PC1 problem."
+        )
     matrix = matrix[finite_rows]
-    if matrix.shape[0] == 0:
-        raise ValueError("No finite gene trajectories available for metrics")
 
     rhos = []
     for y in matrix:
@@ -124,19 +157,15 @@ def metrics(lcpm: pd.DataFrame, days: list[float]) -> dict:
                 rhos.append(float(rho))
     rhos = np.asarray(rhos, dtype=float)
     if len(rhos) == 0:
-        raise ValueError("No variable finite gene trajectories available for metrics")
+        raise ValueError(f"No variable finite gene trajectories available for {label}")
 
     z = matrix - matrix.mean(axis=1, keepdims=True)
     if not np.isfinite(z).all():
-        raise ValueError("Non-finite values remain after centering")
-    # The matrix has only four timepoints. Computing the leading temporal
-    # direction from the 4x4 Gram matrix is mathematically equivalent to SVD
-    # for the nonzero singular directions and is substantially more robust for
-    # the highly rectangular, ill-conditioned gene x time matrix.
+        raise ValueError(f"Non-finite values remain after centering for {label}")
     pc1 = _pc1_from_time_covariance(matrix)
     pc1_rho = spearmanr(t, pc1).statistic
     if not np.isfinite(pc1_rho):
-        raise ValueError("PC1/time Spearman correlation is non-finite")
+        raise ValueError(f"PC1/time Spearman correlation is non-finite for {label}")
     diffs = np.diff(pc1)
     mono = float(max(np.mean(diffs >= 0), np.mean(diffs <= 0)))
     endpoint = matrix[:, -1] - matrix[:, 0]
@@ -185,20 +214,29 @@ def main() -> None:
     days = parse_days(a.sample_days, x.columns)
     donors = parse_donors(a.donors, days)
 
+    selected_samples = [s for samples in donors.values() for s in samples]
+    selected_lib = library_sizes(x[selected_samples])
+    print(json.dumps({
+        "input_shape": [int(x.shape[0]), int(x.shape[1])],
+        "selected_samples": selected_samples,
+        "selected_library_sizes": {k: float(v) for k, v in selected_lib.items()},
+        "selected_nonzero_gene_counts": {k: int((x[k] > 0).sum()) for k in selected_samples},
+    }, indent=2))
+
     donor_traj = {}
     donor_metrics = {}
     for donor, samples in donors.items():
         traj = pointwise_donor_trajectory(x, samples, days)
         ordered_days = [days[s] for s in sorted(samples, key=lambda s: days[s])]
         donor_traj[donor] = traj
-        donor_metrics[donor] = metrics(traj, ordered_days)
+        donor_metrics[donor] = metrics(traj, ordered_days, label=f"donor {donor}")
 
     common_index = donor_traj[next(iter(donor_traj))].index
     if any(not common_index.equals(v.index) for v in donor_traj.values()):
         raise RuntimeError("Donor gene indices are not identical after deterministic mapping")
     canonical = sum(donor_traj.values()) / len(donor_traj)
     canonical_days = donor_metrics[next(iter(donor_metrics))]["timepoints_days"]
-    canonical_metrics = metrics(canonical, canonical_days)
+    canonical_metrics = metrics(canonical, canonical_days, label="canonical Yamanaka")
 
     pooled_parts = []
     for day in canonical_days:
@@ -207,7 +245,7 @@ def main() -> None:
     pooled_counts = pd.concat(pooled_parts, axis=1)
     pooled_counts.columns = canonical_days
     pooled_lcpm = log_cpm(pooled_counts)
-    pooled_metrics = metrics(pooled_lcpm, canonical_days)
+    pooled_metrics = metrics(pooled_lcpm, canonical_days, label="pooled-count alternative")
 
     overlap = representation_overlap(x)
     result = {
