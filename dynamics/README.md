@@ -37,6 +37,8 @@ Optional context/perturbation `u(t)` and history `h(t)` can be provided to the t
 - `Z6_WITHIN_SYSTEM_TRANSFERABILITY_PROTOCOL.md` — frozen Phase 0.1 within-system validation protocol.
 - `Z6_CONTEXT_SPECIFICITY_AUDIT_PROTOCOL.md` — diagnostic protocol for testing reproducibility versus branch/context dependence.
 - `run_z6_context_specificity_audit.py` — executable branch-concordance audit following Phase 0.1.
+- `run_z6_gse67462_identifier_mapping_audit.py` — diagnostic audit of GPL19972/RefSeq feature provenance and mapping to GSE67520 gene/TSS identifiers.
+- `Z6_GSE67462_IDENTIFIER_MAPPING_AUDIT_PROTOCOL.md` — protocol and interpretation rules for the identifier-provenance audit.
 - `../run_z6_predictive_transition.py` — dedicated Z6 executable wrapper.
 
 ## Z6 predictive transition benchmark
@@ -84,6 +86,27 @@ python -m dynamics.run_z6_context_specificity_audit
 ```
 
 The audit is diagnostic only: it does not alter Phase 0/0.1 predictive-support decisions or thresholds. Weak branch concordance in a predictive system is evidence for context-dependent predictive structure, not evidence of biological absence.
+
+## GSE67462/GSE67520 identifier provenance audit
+
+GSE67462 is GPL19972, Brainarray `MoGene10stv1_Mm_REFSEQ version 18`, and its processed GEO feature IDs are RefSeq-like identifiers such as `NM_001001130.2_at`. The Stage 2.6 common-space matrix currently uses gene symbols. The multimodal regulatory analysis therefore requires an explicit feature-provenance audit before interpreting expression/ChIP concordance biologically.
+
+Run:
+
+```powershell
+python -m dynamics.run_z6_gse67462_identifier_mapping_audit `
+  --gtf Data\GSE67520\mm9.refGene.gtf.gz
+```
+
+If a local GPL19972 annotation table is available, pass it explicitly:
+
+```powershell
+python -m dynamics.run_z6_gse67462_identifier_mapping_audit `
+  --gtf Data\GSE67520\mm9.refGene.gtf.gz `
+  --platform-table Data\GSE67462\GPL19972.txt.gz
+```
+
+This audit is diagnostic only. It does not change frozen Z6 predictive support or any threshold. A missing platform annotation is reported as incomplete provenance, not as a biological negative result.
 
 ## Research constraints
 
