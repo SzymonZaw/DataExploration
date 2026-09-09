@@ -24,11 +24,11 @@ A candidate control must satisfy all mandatory criteria before its outcome is in
 
 The preferred class is an unrelated, directional differentiation or terminal state transition measured by bulk RNA-seq over several days. Examples include adipogenic or other lineage differentiation, provided the specific dataset passes the H2-separation and design audits.
 
-A promising candidate identified during the redesign is **GSE249195**, primary human preadipocyte differentiation. GEO reports 24 bulk RNA-seq samples across six timepoints over 14 days, with four replicates per timepoint, and provides a raw-count supplementary file. This is a candidate only; it is **not pre-approved** until the repository-side representation/design/H2 audits pass.
+GSE249195 was a candidate in this class. It is retained as an explicit **INELIGIBLE** example after the locked audit and is not a negative H3 result.
 
 ## 3. Locked structural eligibility thresholds
 
-For GSE249195 and subsequent candidates evaluated under the same audit implementation, the following thresholds are frozen before similarity testing:
+The following thresholds were frozen before GSE249195 similarity testing and remain frozen for the current candidate set:
 
 - PROGENy overlap >= **0.90**.
 - DoRothEA overlap >= **0.90**.
@@ -40,6 +40,8 @@ For GSE249195 and subsequent candidates evaluated under the same audit implement
 - Total temporal span >= **7 days**.
 
 These are structural eligibility criteria, not outcome thresholds for the later Yamanaka-similarity test. Failure means the candidate is not an eligible decisive H3 control; the similarity analysis is not run.
+
+**Important qualification:** the thresholds are currently operational/preregistered-style design thresholds, not claimed to be statistically optimal or literature-derived. Before recruiting additional decisive controls, they must undergo the calibration review in Section 11. That review may revise the protocol only by an explicit, documented change made without using candidate similarity outcomes to select new thresholds.
 
 The H2 nuisance audit is reported separately and reviewed before eligibility is frozen. It is not converted into a post-hoc numerical exclusion rule in the GSE249195 audit script.
 
@@ -104,7 +106,77 @@ This redesign does not modify the historical Stage 2.11C null files and does not
 
 The canonical Yamanaka trajectory used by the prospective H3 controls remains the pointwise arithmetic mean of the historical `a_values` and `b_values`, after verifying that both contain exactly four points.
 
-## 10. Required audit sequence for the next decisive control
+## 10. Current GSE249195 disposition
+
+GSE249195 passed the experimental design/time-span requirements but failed multiple locked structural gates:
+
+- PROGENy overlap: **0.732** < 0.90.
+- DoRothEA overlap: **0.705** < 0.90.
+- Directional gene fraction: **0.144** < 0.60.
+- Median absolute gene Spearman: **0.439** < 0.60.
+- Median absolute day14-day0 log2-CPM difference: **0.017** < 0.50.
+
+PC1 was strongly ordered with native time (absolute Spearman 1.0; adjacent monotonicity 1.0), which is explicitly retained as a diagnostic rather than treated as sufficient eligibility evidence.
+
+Therefore GSE249195 is **INELIGIBLE**, not `NEGATIVE_CONCORDANT`. No similarity/null analysis is permitted for this candidate under the current protocol.
+
+The H2 nuisance audit returned `AUDIT_UNAVAILABLE` because of an unexpected decoupler ULM output format. This does not affect the GSE249195 ineligibility decision because multiple independent structural gates already fail. The decoupler compatibility issue remains technical debt and must be repaired before H2 is used as an eligibility-review input for future candidates.
+
+## 11. Yamanaka structural calibration and protocol-review gate
+
+Before recruiting further decisive H3 controls, the locked structural criteria must be audited against the target Yamanaka process itself. This is a **calibration exercise, not a similarity test**.
+
+Run:
+
+`python dynamics/h3_yamanaka_structural_calibration.py`
+
+The script computes, on the Yamanaka gene-level expression matrix used for the representation:
+
+- PROGENy overlap;
+- DoRothEA overlap;
+- PC1 absolute Spearman correlation with time;
+- PC1 adjacent-step monotonicity;
+- fraction of gene trajectories with |rho| >= 0.80;
+- median absolute gene-level |rho|;
+- median absolute endpoint log2-CPM difference;
+- temporal span.
+
+The calibration has three purposes:
+
+1. determine whether the control gates are commensurable with the target process;
+2. identify whether the PC1-vs-gene-level discrepancy is also present in Yamanaka;
+3. distinguish genuinely stringent eligibility from thresholds that accidentally demand a stronger/broader signal in controls than is present in the target.
+
+The calibration **must not automatically change any threshold**. A threshold revision, if warranted, requires an explicit protocol-review commit that records the reason and is made before inspecting similarity outcomes for a new decisive control.
+
+If the exact Yamanaka gene-level input used for the original representation is unavailable, the calibration is considered incomplete rather than approximated from a different dataset.
+
+## 12. Candidate-exhaustion / stopping rule
+
+The project must not search indefinitely for a control under unchanged eligibility criteria. After **three additional biologically independent candidates** beyond GSE249195 have completed the same eligibility audit, or sooner if the Yamanaka calibration reveals a commensurability failure, perform a formal protocol review before screening more candidates.
+
+The review must examine:
+
+- the distribution of each eligibility metric across Yamanaka and candidate controls;
+- whether failures cluster around one threshold;
+- whether the gates exclude biologically credible controls for reasons unrelated to H3;
+- whether the candidate class itself is too restrictive;
+- whether a gate measures representation quality versus merely effect-size magnitude.
+
+No threshold may be relaxed merely because a candidate failed. A revision must be justified independently of that candidate's eventual similarity result.
+
+## 13. Technical-debt rule
+
+Known infrastructure failures must be tracked separately from biological eligibility decisions. In particular:
+
+- decoupler API/output compatibility must be made explicit and tested;
+- identifier mapping and duplicate-collision behavior must be deterministic and version-recorded;
+- representation-network versions must be pinned or recorded;
+- any previous false-negative/false-zero mapping failure must have a regression test.
+
+A technical audit failure must never be silently interpreted as biological absence of overlap or absence of nuisance activity.
+
+## 14. Required audit sequence for the next decisive control
 
 1. Dataset design audit.
 2. Sample/trajectory independence audit.
