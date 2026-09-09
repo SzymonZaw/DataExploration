@@ -8,10 +8,8 @@ It separates three questions that were previously conflated:
 3. Can the expression features be mapped unambiguously to the gene symbols used
    by the GSE67520 regulatory/TSS annotation?
 
-The audit prefers local provenance files. It never silently treats a small exact
-intersection as biological evidence. If the original GPL19972 feature table is
-available locally, it is used to quantify feature-level provenance; otherwise the
-report records that this part of the audit is unavailable.
+The audit prefers local provenance files. It supports both a simple tabular
+GPL19972 annotation and the authoritative NCBI GEO SOFT family file.
 """
 from __future__ import annotations
 
@@ -49,10 +47,43 @@ def _sha256(path: Path) -> str:
 
 
 def _read_table(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(f"Platform annotation file not found: {path}")
     if path.suffix.lower() == ".gz":
         with gzip.open(path, "rt", encoding="utf-8", errors="replace") as fh:
             return pd.read_csv(fh, sep=None, engine="python")
     return pd.read_csv(path, sep=None, engine="python")
+
+
+def _read_soft_platform(path: Path) -> pd.DataFrame:
+    """Extract the !platform_table_begin/!platform_table_end section from GEO SOFT."""
+    if not path.exists():
+        raise FileNotFoundError(f"GPL19972 SOFT file not found: {path}")
+
+    opener = gzip.open if path.suffix.lower() == ".gz" else open
+    lines: list[str] = []
+    in_table = False
+    with opener(path, "rt", encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            line = raw.rstrip("\r\n")
+            if line.startswith("!platform_table_begin"):
+                in_table = True
+                continue
+            if in_table and line.startswith("!platform_table_end"):
+                break
+            if in_table:
+                lines.append(line)
+
+    if not lines:
+        raise ValueError(
+            f"No !platform_table_begin/!platform_table_end section found in SOFT file: {path}"
+        )
+
+    # GEO SOFT platform tables are tab-delimited. Empty trailing fields are
+    # preserved by pandas, which is useful for sparse annotation columns.
+    from io import StringIO
+
+    return pd.read_csv(StringIO("\n".join(lines)), sep="\t", dtype=str, keep_default_na=False)
 
 
 def _find_feature_column(df: pd.DataFrame) -> str | None:
@@ -85,6 +116,7 @@ def _candidate_platform_tables(root: Path) -> list[Path]:
     roots = [root / "Data" / "GSE67462", root / "Data", root / "results" / "GSE67462"]
     names = {
         "GPL19972.csv", "GPL19972.tsv", "GPL19972.txt", "GPL19972.txt.gz",
+        "GPL19972_family.soft", "GPL19972_family.soft.gz",
         "GSE67462_GPL19972.csv", "GSE67462_GPL19972.tsv", "GSE67462_GPL19972.txt",
         "GSE67462_platform.csv", "GSE67462_platform.tsv", "GSE67462_platform.txt",
     }
@@ -193,7 +225,8 @@ def _build_mapping_report(expression_ids: pd.Index, tss: pd.DataFrame, platform:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gtf", default="Data/GSE67520/mm9.refGene.gtf.gz")
-    parser.add_argument("--platform-table", default=None, help="Optional local GPL19972 feature annotation table")
+    parser.add_argument("--platform-table", default=None, help="Optional local GPL19972 annotation table")
+    parser.add_argument("--platform-soft", default=None, help="Local NCBI GEO GPL19972 SOFT family file (.soft or .soft.gz)")
     parser.add_argument("--output", default="results/Dynamics/z6_gse67462_identifier_mapping_audit")
     args = parser.parse_args()
 
@@ -205,11 +238,22 @@ def main() -> None:
     tss = _load_tss(Path(args.gtf))
     expression_ids = pd.Index([str(x) for x in matrix.index])
 
-    platform_path = Path(args.platform_table) if args.platform_table else None
-    if platform_path is None:
+    platform_path: Path | None = None
+    platform = None
+    if args.platform_soft:
+        platform_path = Path(args.platform_soft)
+        platform = _read_soft_platform(platform_path)
+    elif args.platform_table:
+        platform_path = Path(args.platform_table)
+        platform = _read_table(platform_path)
+    else:
         candidates = _candidate_platform_tables(root)
         platform_path = candidates[0] if candidates else None
-    platform = _read_table(platform_path) if platform_path is not None else None
+        if platform_path is not None:
+            if platform_path.name.lower().endswith(".soft") or platform_path.name.lower().endswith(".soft.gz"):
+                platform = _read_soft_platform(platform_path)
+            else:
+                platform = _read_table(platform_path)
 
     mapping, summary = _build_mapping_report(expression_ids, tss, platform)
     summary.update({
@@ -219,7 +263,8 @@ def main() -> None:
         "gtf_sha256": _sha256(Path(args.gtf)) if Path(args.gtf).exists() else None,
         "platform_table_path": str(platform_path) if platform_path else None,
         "platform_table_sha256": _sha256(platform_path) if platform_path else None,
-        "provenance_note": "GSE67462 is GPL19972 Brainarray MoGene10stv1_Mm_REFSEQ v18; raw processed GEO features are RefSeq-like IDs, while Stage 2.6 common-space IDs are gene symbols. A symbol intersection alone is not evidence of correct feature provenance.",
+        "platform_format": "GEO_SOFT" if args.platform_soft or (platform_path and platform_path.name.lower().endswith(".soft")) else "TABLE" if platform_path else None,
+        "provenance_note": "GSE67462 is GPL19972 Brainarray MoGene10stv1_Mm_REFSEQ v18; GEO processed features are RefSeq-like IDs. The Stage 2.6 common-space matrix uses gene symbols, so platform provenance must be established before regulatory concordance is interpreted.",
     })
 
     mapping.to_csv(out / "01_feature_mapping_audit.csv", index=False)
@@ -237,9 +282,11 @@ def main() -> None:
     print(f"Case-insensitive expression/TSS symbol overlap: {summary['expression_case_insensitive_symbol_overlap']}")
     if platform is None:
         print("GPL19972 platform annotation: NOT FOUND LOCALLY")
-        print("Provide --platform-table to quantify RefSeq/probe-to-symbol provenance.")
+        print("Provide --platform-table or --platform-soft.")
     else:
         print(f"GPL19972 platform annotation: {platform_path}")
+        print(f"Platform format: {summary['platform_format']}")
+        print(f"Platform rows: {len(platform)}")
         print(f"Platform feature matches: {summary['expression_platform_feature_matches']}")
         print(f"Platform-symbol to TSS matches: {summary['expression_platform_symbol_to_tss_matches']}")
     print(f"Outputs: {out}")
