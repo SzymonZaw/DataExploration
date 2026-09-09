@@ -126,25 +126,31 @@ The H2 nuisance audit returned `AUDIT_UNAVAILABLE` because of an unexpected deco
 
 Before recruiting further decisive H3 controls, the locked structural criteria must be audited against the target Yamanaka process itself. This is a **calibration exercise, not a similarity test**.
 
-Run:
+Two scripts are intentionally separated:
 
-`python dynamics/h3_yamanaka_structural_calibration.py`
+1. `dynamics/h3_yamanaka_structural_calibration.py` reproduces the prospective structural metrics using the pooled-count construction used by the first calibration pass.
+2. `dynamics/h3_target_commensurability_audit.py` is the authoritative v1 commensurability audit. It evaluates each donor separately and constructs the canonical target as the **pointwise arithmetic mean of donor-wise log2(CPM+1) trajectories**, matching the protocol's historical aggregation rule at the representation level. It also reports the pooled-count construction as a sensitivity diagnostic.
 
-The script computes, on the Yamanaka gene-level expression matrix used for the representation:
+Run the authoritative audit with:
 
-- PROGENy overlap;
-- DoRothEA overlap;
-- PC1 absolute Spearman correlation with time;
-- PC1 adjacent-step monotonicity;
-- fraction of gene trajectories with |rho| >= 0.80;
-- median absolute gene-level |rho|;
-- median absolute endpoint log2-CPM difference;
-- temporal span.
+`python dynamics/h3_target_commensurability_audit.py --expression results/GSE297234/01_sample_level_counts.csv --sample-days "GSM8986586:0,GSM8986587:3,GSM8986588:7,GSM8986589:10,GSM8986590:0,GSM8986591:3,GSM8986592:7,GSM8986593:10" --donors "GM00731:GSM8986586,GSM8986587,GSM8986588,GSM8986589;GM23815:GSM8986590,GSM8986591,GSM8986592,GSM8986593"`
+
+The audit reports:
+
+- donor-level temporal metrics for GM00731 and GM23815;
+- canonical Yamanaka temporal metrics;
+- the locked-gate comparison for the canonical target;
+- gene-level and endpoint effect-size quantiles rather than only pass/fail summaries;
+- canonical-vs-pooled-count sensitivity differences;
+- PROGENy and DoRothEA overlap;
+- explicit guardrails against automatic threshold modification.
+
+The current audit is deliberately performed in `log2(CPM+1)` metric space because that is the prospective-control metric space. The historical Stage 2 representation used `log1p(CPM)` for exploratory PCA; the log base does not alter rank-based temporal statistics, while endpoint magnitudes are reported in the prospective metric space. This distinction must remain explicit in any interpretation.
 
 The calibration has three purposes:
 
 1. determine whether the control gates are commensurable with the target process;
-2. identify whether the PC1-vs-gene-level discrepancy is also present in Yamanaka;
+2. identify whether the PC1-vs-gene-level discrepancy is also present in Yamanaka and whether it differs between donors and the canonical average;
 3. distinguish genuinely stringent eligibility from thresholds that accidentally demand a stronger/broader signal in controls than is present in the target.
 
 The calibration **must not automatically change any threshold**. A threshold revision, if warranted, requires an explicit protocol-review commit that records the reason and is made before inspecting similarity outcomes for a new decisive control.
