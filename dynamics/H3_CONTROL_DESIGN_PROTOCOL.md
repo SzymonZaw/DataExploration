@@ -24,9 +24,26 @@ A candidate control must satisfy all mandatory criteria before its outcome is in
 
 The preferred class is an unrelated, directional differentiation or terminal state transition measured by bulk RNA-seq over several days. Examples include adipogenic or other lineage differentiation, provided the specific dataset passes the H2-separation and design audits.
 
-A promising candidate identified during the redesign is **GSE249195**, primary human preadipocyte differentiation. GEO reports 24 bulk RNA-seq samples across six timepoints over 14 days, with four replicates per timepoint, and provides a raw-count supplementary file. This is a candidate only; it is **not pre-approved** until the repository-side representation/design/H2 audits pass. 
+A promising candidate identified during the redesign is **GSE249195**, primary human preadipocyte differentiation. GEO reports 24 bulk RNA-seq samples across six timepoints over 14 days, with four replicates per timepoint, and provides a raw-count supplementary file. This is a candidate only; it is **not pre-approved** until the repository-side representation/design/H2 audits pass.
 
-## 3. Temporal alignment rule
+## 3. Locked structural eligibility thresholds
+
+For GSE249195 and subsequent candidates evaluated under the same audit implementation, the following thresholds are frozen before similarity testing:
+
+- PROGENy overlap >= **0.90**.
+- DoRothEA overlap >= **0.90**.
+- PC1 absolute Spearman correlation with native time >= **0.80**.
+- PC1 adjacent-step monotonic fraction >= **0.80** (at least 4 of 5 adjacent intervals for a six-timepoint design must have the same sign after accounting for arbitrary PC1 sign).
+- Fraction of gene trajectories with absolute Spearman |rho| >= **0.80** >= **0.60**.
+- Median absolute gene-level Spearman |rho| >= **0.60**.
+- Median absolute day-final vs day-zero log2-CPM difference >= **0.50**.
+- Total temporal span >= **7 days**.
+
+These are structural eligibility criteria, not outcome thresholds for the later Yamanaka-similarity test. Failure means the candidate is not an eligible decisive H3 control; the similarity analysis is not run.
+
+The H2 nuisance audit is reported separately and reviewed before eligibility is frozen. It is not converted into a post-hoc numerical exclusion rule in the GSE249195 audit script.
+
+## 4. Temporal alignment rule
 
 Do not equate biological hours/days across experiments. For an eligible directional control:
 
@@ -37,7 +54,7 @@ Do not equate biological hours/days across experiments. For an eligible directio
 
 The control must not be made more similar to Yamanaka by selecting favorable phases, windows, or interpolation points.
 
-## 4. Primary statistic
+## 5. Primary statistic
 
 For each feature family (PROGENy and DoRothEA), calculate the median across common features of the feature-wise Pearson correlation between the canonical Yamanaka four-point trajectory and the aligned control trajectory.
 
@@ -45,7 +62,7 @@ The feature-matching permutation null remains a diagnostic null: feature rows ar
 
 This null does **not** test every possible generic temporal artifact. Therefore a negative result is interpreted only within the predeclared control design.
 
-## 5. Aggregation rule across PROGENy and DoRothEA
+## 6. Aggregation rule across PROGENy and DoRothEA
 
 PROGENy and DoRothEA are treated as two representation families, **not as independent biological experiments**.
 
@@ -59,7 +76,7 @@ Suggested locked labels:
 
 The exact alpha/empirical-tail threshold must be fixed in the analysis configuration before the candidate's result is inspected.
 
-## 6. Aggregation rule across independent controls
+## 7. Aggregation rule across independent controls
 
 A final H3 closure requires at least **two eligible, biologically orthogonal controls**.
 
@@ -70,7 +87,7 @@ A final H3 closure requires at least **two eligible, biologically orthogonal con
 
 This rule is locked before the second decisive control is analyzed.
 
-## 7. GSE263713 disposition
+## 8. GSE263713 disposition
 
 GSE263713 is retained because it is technically valid and useful as an exploratory contrast, but it is not counted toward the two-control decisive H3 gate.
 
@@ -81,20 +98,20 @@ Its observed results remain unchanged:
 
 These values should not be described as proof that H3 is false. The current script records the decision as `H3_EXPLORATORY_ONLY`.
 
-## 8. Historical-data protection
+## 9. Historical-data protection
 
 This redesign does not modify the historical Stage 2.11C null files and does not rerun `run_yamanaka_control_null.py`.
 
 The canonical Yamanaka trajectory used by the prospective H3 controls remains the pointwise arithmetic mean of the historical `a_values` and `b_values`, after verifying that both contain exactly four points.
 
-## 9. Required audit sequence for the next decisive control
+## 10. Required audit sequence for the next decisive control
 
 1. Dataset design audit.
 2. Sample/trajectory independence audit.
 3. Gene-ID/HGNC mapping audit.
 4. PROGENy/DoRothEA representation overlap gate.
 5. H2/nuisance-axis audit.
-6. Directional temporal-geometry audit.
+6. Directional temporal-geometry audit using the locked thresholds above.
 7. Freeze eligibility decision before similarity testing.
 8. Run the identical locked similarity/null procedure.
 9. Apply the predeclared within-control aggregation rule.
