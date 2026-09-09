@@ -39,10 +39,10 @@ DEFAULT_OUTPUT = "results/Dynamics/z6_gse67462_multimodal_robustness_audit"
 RADII = {"promoter_2kb": 2000, "nearest_tss_25kb": 25000, "nearest_tss_50kb": 50000, "nearest_tss_100kb": 100000}
 
 
-def _validated_expression():
+def _validated_expression(gtf: Path, platform_soft: Path):
     matrix, metadata = validation._load_common_space()
-    tss = _load_tss(Path(DEFAULT_GTF))
-    platform = _read_soft_platform(Path(DEFAULT_SOFT))
+    tss = _load_tss(gtf)
+    platform = _read_soft_platform(platform_soft)
     mapping, summary = _build_mapping_report(pd.Index(matrix.index.astype(str)), tss, platform)
     valid = set(mapping.loc[mapping["platform_symbol_tss_match"].fillna(0).astype(int) > 0, "expression_id"].map(_norm_symbol))
     _, expr_raw, branches = _expression_common(matrix, metadata)
@@ -96,12 +96,13 @@ def _concordance(expr, values):
     rows = []
     for modality in sorted(set(m for m, _, _ in values)):
         entries = sorted([(t, v) for m, t, v in values if m == modality], key=lambda x: x[0])
-        times = [t for t, _ in entries if t in expr.index]
+        valid_entries = [(t, v) for t, v in entries if t in expr.index]
+        times = [t for t, _ in valid_entries]
         if len(times) < 5:
             rows.append({"modality": modality, "n_timepoints": len(times), "n_genes": 0, "observed_global_spearman": np.nan})
             continue
         genes = pd.Index(expr.columns.astype(str))
-        mod = pd.DataFrame([{g: v.get(g, 0.0) for g in genes} for _, v in entries if _ in expr.index], index=times)
+        mod = pd.DataFrame([{g: v.get(g, 0.0) for g in genes} for _, v in valid_entries], index=times)
         common = genes[genes.isin(mod.columns)]
         rhos = [_spearman(expr.loc[times, g].to_numpy(), mod.loc[times, g].to_numpy()) for g in common]
         rhos = np.asarray(rhos, dtype=float)
@@ -138,7 +139,7 @@ def main():
     supported = mapped[mapped["supported"]].copy()
     supported.to_csv(out / "01_supported_modalities.csv", index=False)
 
-    expr, tss, branches, mapping_summary = _validated_expression()
+    expr, tss, branches, mapping_summary = _validated_expression(Path(args.gtf), Path(args.platform_soft))
     valid_symbols = set(expr.columns)
     files = _discover_files(Path(args.modality_root))
     if any(not files[k] for k in MODALITIES):
