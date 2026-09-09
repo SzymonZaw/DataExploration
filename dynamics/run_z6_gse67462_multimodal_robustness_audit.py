@@ -39,10 +39,10 @@ DEFAULT_OUTPUT = "results/Dynamics/z6_gse67462_multimodal_robustness_audit"
 RADII = {"promoter_2kb": 2000, "nearest_tss_25kb": 25000, "nearest_tss_50kb": 50000, "nearest_tss_100kb": 100000}
 
 
-def _validated_expression(gtf: Path, platform_soft: Path):
+def _validated_expression(gtf_path: Path, soft_path: Path):
     matrix, metadata = validation._load_common_space()
-    tss = _load_tss(gtf)
-    platform = _read_soft_platform(platform_soft)
+    tss = _load_tss(gtf_path)
+    platform = _read_soft_platform(soft_path)
     mapping, summary = _build_mapping_report(pd.Index(matrix.index.astype(str)), tss, platform)
     valid = set(mapping.loc[mapping["platform_symbol_tss_match"].fillna(0).astype(int) > 0, "expression_id"].map(_norm_symbol))
     _, expr_raw, branches = _expression_common(matrix, metadata)
@@ -56,12 +56,24 @@ def _validated_expression(gtf: Path, platform_soft: Path):
     return expr, tss, branches, summary
 
 
+def _coerce_time(value):
+    """Return a numeric time or None for non-time labels such as iPSC."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if np.isfinite(value) else None
+
+
 def _nearest_values(files, tss, radius, valid_symbols):
     by_chrom = {c: g.sort_values("tss") for c, g in tss.groupby("chrom")}
     rows = []
     provenance = []
     for modality, entries in files.items():
         for time, path in entries:
+            numeric_time = _coerce_time(time)
+            if numeric_time is None:
+                continue
             values = {}
             peaks = _parse_peak_file(path)
             assigned = 0
@@ -87,24 +99,25 @@ def _nearest_values(files, tss, radius, valid_symbols):
                     continue
                 values[gene] = values.get(gene, 0.0) + max(float(score), 0.0)
                 assigned += 1
-            rows.append((modality, time, values))
-            provenance.append({"modality": modality, "time": str(time), "n_peaks": len(peaks), "n_assigned_valid": assigned})
+            rows.append((modality, numeric_time, values))
+            provenance.append({"modality": modality, "time": str(numeric_time), "n_peaks": len(peaks), "n_assigned_valid": assigned})
     return rows, provenance
 
 
 def _concordance(expr, values):
     rows = []
+    expr_index = {_coerce_time(t): t for t in expr.index if _coerce_time(t) is not None}
     for modality in sorted(set(m for m, _, _ in values)):
-        entries = sorted([(t, v) for m, t, v in values if m == modality], key=lambda x: x[0])
-        valid_entries = [(t, v) for t, v in entries if t in expr.index]
-        times = [t for t, _ in valid_entries]
+        entries = sorted([(float(t), v) for m, t, v in values if m == modality and _coerce_time(t) is not None], key=lambda x: x[0])
+        times = [t for t, _ in entries if t in expr_index]
         if len(times) < 5:
-            rows.append({"modality": modality, "n_timepoints": len(times), "n_genes": 0, "observed_global_spearman": np.nan})
+            rows.append({"modality": modality, "n_timepoints": len(times), "n_genes": 0, "median_gene_spearman": np.nan, "mean_gene_spearman": np.nan, "observed_global_spearman": np.nan})
             continue
+        expr_labels = [expr_index[t] for t in times]
         genes = pd.Index(expr.columns.astype(str))
-        mod = pd.DataFrame([{g: v.get(g, 0.0) for g in genes} for _, v in valid_entries], index=times)
+        mod = pd.DataFrame([{g: v.get(g, 0.0) for g in genes} for _, v in entries if _ in times], index=times)
         common = genes[genes.isin(mod.columns)]
-        rhos = [_spearman(expr.loc[times, g].to_numpy(), mod.loc[times, g].to_numpy()) for g in common]
+        rhos = [_spearman(expr.loc[expr_labels, g].to_numpy(), mod.loc[times, g].to_numpy()) for g in common]
         rhos = np.asarray(rhos, dtype=float)
         rhos = rhos[np.isfinite(rhos)]
         rows.append({
@@ -113,7 +126,7 @@ def _concordance(expr, values):
             "n_genes": int(len(rhos)),
             "median_gene_spearman": float(np.median(rhos)) if len(rhos) else np.nan,
             "mean_gene_spearman": float(np.mean(rhos)) if len(rhos) else np.nan,
-            "observed_global_spearman": _spearman(expr.loc[times, common].to_numpy().ravel(), mod.loc[times, common].to_numpy().ravel()),
+            "observed_global_spearman": _spearman(expr.loc[expr_labels, common].to_numpy().ravel(), mod.loc[times, common].to_numpy().ravel()),
         })
     return pd.DataFrame(rows)
 
