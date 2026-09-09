@@ -91,6 +91,23 @@ def pointwise_donor_trajectory(x: pd.DataFrame, samples: list[str], days: dict[s
     return sample_log_cpm(x[ordered])
 
 
+def _pc1_from_time_covariance(matrix: np.ndarray) -> np.ndarray:
+    """Stable PC1 for a gene x time matrix with only a few timepoints.
+
+    This is computationally equivalent to SVD for the temporal score direction,
+    but works on the small time-by-time Gram matrix and avoids LAPACK SVD
+    convergence failures on ill-conditioned expression matrices.
+    """
+    z = matrix - matrix.mean(axis=1, keepdims=True)
+    gram = z.T @ z
+    gram = (gram + gram.T) / 2.0
+    eigenvalues, eigenvectors = np.linalg.eigh(gram)
+    pc1 = eigenvectors[:, int(np.argmax(eigenvalues))]
+    if not np.isfinite(pc1).all():
+        raise ValueError("PC1 contains non-finite values")
+    return pc1
+
+
 def metrics(lcpm: pd.DataFrame, days: list[float]) -> dict:
     t = np.asarray(days, dtype=float)
     matrix = lcpm.to_numpy(dtype=float, copy=True)
@@ -112,10 +129,11 @@ def metrics(lcpm: pd.DataFrame, days: list[float]) -> dict:
     z = matrix - matrix.mean(axis=1, keepdims=True)
     if not np.isfinite(z).all():
         raise ValueError("Non-finite values remain after centering")
-    # SVD is run only after explicit finite-value filtering. copy=True also
-    # guarantees writable memory for NumPy versions that expose read-only views.
-    _, _, vt = np.linalg.svd(z, full_matrices=False)
-    pc1 = vt[0]
+    # The matrix has only four timepoints. Computing the leading temporal
+    # direction from the 4x4 Gram matrix is mathematically equivalent to SVD
+    # for the nonzero singular directions and is substantially more robust for
+    # the highly rectangular, ill-conditioned gene x time matrix.
+    pc1 = _pc1_from_time_covariance(matrix)
     pc1_rho = spearmanr(t, pc1).statistic
     if not np.isfinite(pc1_rho):
         raise ValueError("PC1/time Spearman correlation is non-finite")
