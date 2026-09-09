@@ -9,14 +9,15 @@ changes thresholds automatically.
 
 Example:
   python dynamics/h3_yamanaka_structural_calibration.py \
-      --expression Data/GSE297234_expression.tsv.gz \
-      --sample-days "GM00731_D0:0,GM00731_D3:3,GM00731_D7:7,GM00731_D10:10,HFIB_D0:0,HFIB_D3:3,HFIB_D7:7,HFIB_D10:10"
+      --expression results/GSE297234/01_sample_level_counts.csv \
+      --sample-days "GSM8986586:0,GSM8986587:3,GSM8986588:7,GSM8986589:10,GSM8986590:0,GSM8986591:3,GSM8986592:7,GSM8986593:10"
 
 The expression matrix must be gene x sample, with the first column containing
 gene identifiers. Multiple biological trajectories may be supplied; values are
 averaged within each native timepoint before calculating gene-level temporal
 metrics, matching the pointwise aggregation logic used elsewhere in the H3
-protocol.
+protocol. The input should be sample-level pseudobulk counts; the calibration
+applies log2(CPM + 1) internally, matching the prospective-control metric space.
 """
 
 import argparse
@@ -113,11 +114,11 @@ def temporal_metrics(x: pd.DataFrame, samples: list[str], days: np.ndarray) -> d
     lcpm = log_cpm(day_mean_counts)
     rhos = []
     for _, row in lcpm.iterrows():
-        y = row.to_numpy(float)
+        y = row.to_numpy(dtype=float, copy=True)
         if np.std(y) > 0:
             rhos.append(float(spearmanr(ordered_days, y).statistic))
     rhos = np.asarray(rhos, dtype=float)
-    z = lcpm.to_numpy(float)
+    z = lcpm.to_numpy(dtype=float, copy=True)
     z -= z.mean(axis=1, keepdims=True)
     _, _, vt = np.linalg.svd(z, full_matrices=False)
     pc1 = vt[0]
