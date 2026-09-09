@@ -34,6 +34,9 @@ Optional context/perturbation `u(t)` and history `h(t)` can be provided to the t
 - `model_benchmark.py` — unified leakage-free forecasting benchmark used by Z6.
 - `run_model_benchmark.py` — frozen Phase 0 benchmark runner.
 - `Z6_PREDICTIVE_TRANSITION_PROTOCOL.md` — doctoral Z6 protocol for out-of-sample prediction of future cellular state.
+- `Z6_WITHIN_SYSTEM_TRANSFERABILITY_PROTOCOL.md` — frozen Phase 0.1 within-system validation protocol.
+- `Z6_CONTEXT_SPECIFICITY_AUDIT_PROTOCOL.md` — diagnostic protocol for testing reproducibility versus branch/context dependence.
+- `run_z6_context_specificity_audit.py` — executable branch-concordance audit following Phase 0.1.
 - `../run_z6_predictive_transition.py` — dedicated Z6 executable wrapper.
 
 ## Z6 predictive transition benchmark
@@ -69,6 +72,18 @@ python run_z6_predictive_transition.py --epochs 25 --permutation-n 50 --seeds 41
 ```
 
 The official Z6 result is not established until the full benchmark has been executed and its predefined predictive-support criteria have been evaluated.
+
+## Z6 context-specificity audit
+
+After Phase 0.1, predictive support was observed only in GSE67462 for autoencoder and PCA. Predictive performance alone is not treated as biological specificity. The context audit therefore compares the two independent branches within each system using gene-level temporal concordance, endpoint direction concordance, endpoint-effect correlation and per-timepoint molecular concordance.
+
+Run it with:
+
+```powershell
+python -m dynamics.run_z6_context_specificity_audit
+```
+
+The audit is diagnostic only: it does not alter Phase 0/0.1 predictive-support decisions or thresholds. Weak branch concordance in a predictive system is evidence for context-dependent predictive structure, not evidence of biological absence.
 
 ## Research constraints
 
