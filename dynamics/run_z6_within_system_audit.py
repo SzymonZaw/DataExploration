@@ -22,25 +22,40 @@ SEEDS = (411, 412, 413, 414, 415)
 SYSTEMS = ("GSE28688", "GSE67462", "GSE297234")
 
 
-def _branch_labels(metadata: pd.DataFrame, dataset: str) -> tuple[str, str]:
-    g = metadata[(metadata.dataset == dataset) & metadata.time_hours.notna()].copy()
-    if dataset == "GSE297234":
-        # replicate() is intentionally unknown for GSM-only labels.  The GEO
-        # design identifies two independent donors, which validation exposes
-        # as condition=aged/young.
-        labels = sorted(x for x in g.condition.dropna().unique() if x in {"aged", "young"})
-        if len(labels) == 2:
-            return "donor", labels[0]
-        raise RuntimeError("GSE297234 donor branches aged/young were not recovered")
+def _assign_gse28688_replicates(g: pd.DataFrame) -> pd.Series:
+    """Recover the two experimental branches from the GEO sample order.
 
-    labels = sorted(x for x in g.replicate.dropna().astype(str).unique() if x.lower() != "unknown")
-    if len(labels) < 2:
-        raise RuntimeError(f"{dataset}: expected >=2 identifiable replicate branches, got {labels}")
-    return "replicate", labels[0]
+    GSE28688 records timed HFF1 samples as paired -a/-b measurements at each
+    timepoint: GSM710513/514 (0 h), 515/516 (24 h), 517/518 (48 h), and
+    519/520 (72 h). The common-space matrix preserves this GEO sample order,
+    so even/odd matrix-column indices recover the same a/b pairing without
+    relying on the legacy replicate field, which is unresolved for these GSM
+    labels in the current validation metadata.
+    """
+    timed = g[g.time_hours.notna() & g.matrix_column.notna()].copy()
+    parsed = pd.to_numeric(
+        timed.matrix_column.astype(str).str.extract(r"__(\d+)$")[0],
+        errors="coerce",
+    )
+    if parsed.isna().any():
+        raise RuntimeError("GSE28688: could not parse common-space matrix column indices")
 
-
-def _branch_key(dataset: str, branch_type: str, branch: str) -> str:
-    return f"{dataset}__{branch_type}_{branch}"
+    # GEO order is paired a,b at every timed point; validate that invariant
+    # before using it as the branch definition.
+    tmp = timed.assign(_idx=parsed.astype(int))
+    counts = tmp.groupby("time_hours")['_idx'].apply(
+        lambda x: sorted(int(v) % 2 for v in x.tolist())
+    )
+    bad = counts[counts.map(lambda x: x != [0, 1])]
+    if not bad.empty:
+        raise RuntimeError(
+            "GSE28688: expected exactly one odd and one even timed sample per "
+            f"timepoint, got {bad.to_dict()}"
+        )
+    return pd.Series(
+        np.where(parsed.to_numpy(dtype=int) % 2 == 0, "a", "b"),
+        index=timed.index,
+    ).reindex(g.index)
 
 
 def _build_system_data(matrix: pd.DataFrame, metadata: pd.DataFrame, dataset: str):
@@ -48,6 +63,12 @@ def _build_system_data(matrix: pd.DataFrame, metadata: pd.DataFrame, dataset: st
     if dataset == "GSE297234":
         g["branch"] = g.condition.astype(str)
         branch_type = "donor"
+    elif dataset == "GSE28688":
+        # The legacy replicate field is unresolved for GSM710513-520.
+        # Recover the documented GEO -a/-b branches from the preserved sample
+        # order in the common-space matrix.
+        g["branch"] = _assign_gse28688_replicates(g).astype(str)
+        branch_type = "replicate"
     else:
         g["branch"] = g.replicate.astype(str)
         branch_type = "replicate"
@@ -65,7 +86,7 @@ def _build_system_data(matrix: pd.DataFrame, metadata: pd.DataFrame, dataset: st
         ).groupby(level=0, sort=True).mean()
         if len(frame) < 4:
             continue
-        key = _branch_key(dataset, branch_type, str(branch))
+        key = f"{dataset}__{branch_type}_{branch}"
         data[key] = (frame.index.to_numpy(dtype=float), frame.to_numpy(dtype=float))
         inventory.append(
             {
@@ -152,7 +173,7 @@ def main(permutation_n: int = 1000):
         "protocol": "Z6 Phase 0.1 within-system transferability audit",
         "systems": list(SYSTEMS),
         "validation": "leave-one-branch-out within each biological system",
-        "GSE28688_branch": "replicate a/b",
+        "GSE28688_branch": "GEO paired -a/-b timed samples, recovered from preserved sample order",
         "GSE67462_branch": "replicate 1/2",
         "GSE297234_branch": "donor aged/young; not technical replication",
         "seeds": list(SEEDS),
