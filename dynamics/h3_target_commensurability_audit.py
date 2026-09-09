@@ -117,16 +117,13 @@ def sample_log_cpm(x: pd.DataFrame) -> pd.DataFrame:
 
 def pointwise_donor_trajectory(x: pd.DataFrame, samples: list[str], days: dict[str, float]) -> pd.DataFrame:
     ordered = sorted(samples, key=lambda s: days[s])
-    return sample_log_cpm(x[ordered])
+    traj = sample_log_cpm(x[ordered])
+    traj.columns = [days[s] for s in ordered]
+    return traj
 
 
 def _pc1_from_time_covariance(matrix: np.ndarray) -> np.ndarray:
-    """Stable PC1 for a gene x time matrix with only a few timepoints.
-
-    This is computationally equivalent to SVD for the temporal score direction,
-    but works on the small time-by-time Gram matrix and avoids LAPACK SVD
-    convergence failures on ill-conditioned expression matrices.
-    """
+    """Stable PC1 for a gene x time matrix with only a few timepoints."""
     z = matrix - matrix.mean(axis=1, keepdims=True)
     gram = z.T @ z
     gram = (gram + gram.T) / 2.0
@@ -231,15 +228,17 @@ def main() -> None:
     donor_metrics = {}
     for donor, samples in donors.items():
         traj = pointwise_donor_trajectory(x, samples, days)
-        ordered_days = [days[s] for s in sorted(samples, key=lambda s: days[s])]
+        ordered_days = sorted(days[s] for s in samples)
         donor_traj[donor] = traj
         donor_metrics[donor] = metrics(traj, ordered_days, label=f"donor {donor}")
 
     common_index = donor_traj[next(iter(donor_traj))].index
     if any(not common_index.equals(v.index) for v in donor_traj.values()):
         raise RuntimeError("Donor gene indices are not identical after deterministic mapping")
-    canonical = sum(donor_traj.values()) / len(donor_traj)
-    canonical_days = donor_metrics[next(iter(donor_metrics))]["timepoints_days"]
+    canonical_days = sorted({days[s] for samples in donors.values() for s in samples})
+    donor_frames = [donor_traj[donor].loc[:, canonical_days] for donor in donor_traj]
+    canonical = pd.concat(donor_frames, axis=0, keys=donor_traj.keys()).groupby(level=1).mean()
+    canonical = canonical.loc[:, canonical_days]
     canonical_metrics = metrics(canonical, canonical_days, label="canonical Yamanaka")
 
     pooled_parts = []
