@@ -84,7 +84,11 @@ def parse_donors(spec: str, days: dict[str, float]) -> dict[str, list[str]]:
 
 
 def library_sizes(x: pd.DataFrame) -> pd.Series:
-    lib = x.sum(axis=0, dtype=float)
+    # DataFrame.sum() does not accept a dtype keyword in the pandas version
+    # used by the project. Convert the selected matrix explicitly to float
+    # before the reduction instead.
+    values = x.to_numpy(dtype=float, copy=False)
+    lib = pd.Series(values.sum(axis=0), index=x.columns, dtype=float)
     if not np.isfinite(lib.to_numpy()).all():
         bad = lib[~np.isfinite(lib)]
         raise ValueError(f"Non-finite library sizes detected: {bad.to_dict()}")
