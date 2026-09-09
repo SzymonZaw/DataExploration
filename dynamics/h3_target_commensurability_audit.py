@@ -8,14 +8,6 @@ trajectories separately and the canonical trajectory defined as the pointwise
 arithmetic mean of donor-wise normalized trajectories. It also reports the
 alternative pooled-count construction used by the earlier calibration script,
 so that the aggregation choice is explicit rather than implicit.
-
-Example:
-  python dynamics/h3_target_commensurability_audit.py \
-      --expression results/GSE297234/01_sample_level_counts.csv \
-      --sample-days "GSM8986586:0,GSM8986587:3,GSM8986588:7,GSM8986589:10,GSM8986590:0,GSM8986591:3,GSM8986592:7,GSM8986593:10" \
-      --donors "GM00731:GSM8986586,GSM8986587,GSM8986588,GSM8986589;GM23815:GSM8986590,GSM8986591,GSM8986592,GSM8986593"
-
-The audit deliberately does not alter the frozen eligibility thresholds.
 """
 
 import argparse
@@ -85,9 +77,13 @@ def parse_donors(spec: str, days: dict[str, float]) -> dict[str, list[str]]:
     return out
 
 
-def sample_log_cpm(x: pd.DataFrame) -> pd.DataFrame:
+def log_cpm(x: pd.DataFrame) -> pd.DataFrame:
     lib = x.sum(axis=0).replace(0, np.nan)
     return np.log2(x.div(lib, axis=1) * 1e6 + 1.0)
+
+
+def sample_log_cpm(x: pd.DataFrame) -> pd.DataFrame:
+    return log_cpm(x)
 
 
 def pointwise_donor_trajectory(x: pd.DataFrame, samples: list[str], days: dict[str, float]) -> pd.DataFrame:
@@ -95,41 +91,45 @@ def pointwise_donor_trajectory(x: pd.DataFrame, samples: list[str], days: dict[s
     return sample_log_cpm(x[ordered])
 
 
-def aggregate_pooled_counts(x: pd.DataFrame, samples: list[str], days: dict[str, float]) -> pd.DataFrame:
-    ordered = sorted(samples, key=lambda s: days[s])
-    tmp = x[ordered].T.copy()
-    tmp["__day__"] = [days[s] for s in ordered]
-    return log_cpm(tmp.groupby("__day__").mean().T)
-
-
-def log_cpm(x: pd.DataFrame) -> pd.DataFrame:
-    lib = x.sum(axis=0).replace(0, np.nan)
-    return np.log2(x.div(lib, axis=1) * 1e6 + 1.0)
-
-
 def metrics(lcpm: pd.DataFrame, days: list[float]) -> dict:
     t = np.asarray(days, dtype=float)
+    matrix = lcpm.to_numpy(dtype=float, copy=True)
+    finite_rows = np.isfinite(matrix).all(axis=1)
+    matrix = matrix[finite_rows]
+    if matrix.shape[0] == 0:
+        raise ValueError("No finite gene trajectories available for metrics")
+
     rhos = []
-    for row in lcpm.itertuples(index=False, name=None):
-        y = np.asarray(row, dtype=float)
+    for y in matrix:
         if np.std(y) > 0:
-            rhos.append(float(spearmanr(t, y).statistic))
+            rho = spearmanr(t, y).statistic
+            if np.isfinite(rho):
+                rhos.append(float(rho))
     rhos = np.asarray(rhos, dtype=float)
-    z = lcpm.to_numpy(dtype=float, copy=True)
-    z -= z.mean(axis=1, keepdims=True)
+    if len(rhos) == 0:
+        raise ValueError("No variable finite gene trajectories available for metrics")
+
+    z = matrix - matrix.mean(axis=1, keepdims=True)
+    if not np.isfinite(z).all():
+        raise ValueError("Non-finite values remain after centering")
+    # SVD is run only after explicit finite-value filtering. copy=True also
+    # guarantees writable memory for NumPy versions that expose read-only views.
     _, _, vt = np.linalg.svd(z, full_matrices=False)
     pc1 = vt[0]
-    pc1_rho = float(spearmanr(t, pc1).statistic)
+    pc1_rho = spearmanr(t, pc1).statistic
+    if not np.isfinite(pc1_rho):
+        raise ValueError("PC1/time Spearman correlation is non-finite")
     diffs = np.diff(pc1)
     mono = float(max(np.mean(diffs >= 0), np.mean(diffs <= 0)))
-    endpoint = lcpm.iloc[:, -1].to_numpy(float) - lcpm.iloc[:, 0].to_numpy(float)
+    endpoint = matrix[:, -1] - matrix[:, 0]
     abs_rho = np.abs(rhos)
     return {
         "n_genes_with_variable_trajectory": int(len(rhos)),
+        "n_genes_used_for_pc1": int(matrix.shape[0]),
         "n_timepoints": int(len(t)),
         "timepoints_days": t.tolist(),
         "time_span_days": float(t[-1] - t[0]),
-        "pc1_abs_spearman": abs(pc1_rho),
+        "pc1_abs_spearman": float(abs(pc1_rho)),
         "pc1_adjacent_monotonic_fraction": mono,
         "directional_gene_fraction_abs_spearman_ge_0_80": float(np.mean(abs_rho >= 0.80)),
         "median_abs_gene_spearman": float(np.median(abs_rho)),
