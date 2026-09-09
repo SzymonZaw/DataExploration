@@ -18,6 +18,7 @@ import gzip
 import hashlib
 import json
 import re
+from io import StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -51,8 +52,8 @@ def _read_table(path: Path) -> pd.DataFrame:
         raise FileNotFoundError(f"Platform annotation file not found: {path}")
     if path.suffix.lower() == ".gz":
         with gzip.open(path, "rt", encoding="utf-8", errors="replace") as fh:
-            return pd.read_csv(fh, sep=None, engine="python")
-    return pd.read_csv(path, sep=None, engine="python")
+            return pd.read_csv(fh, sep=None, engine="python", dtype=str)
+    return pd.read_csv(path, sep=None, engine="python", dtype=str)
 
 
 def _read_soft_platform(path: Path) -> pd.DataFrame:
@@ -79,10 +80,6 @@ def _read_soft_platform(path: Path) -> pd.DataFrame:
             f"No !platform_table_begin/!platform_table_end section found in SOFT file: {path}"
         )
 
-    # GEO SOFT platform tables are tab-delimited. Empty trailing fields are
-    # preserved by pandas, which is useful for sparse annotation columns.
-    from io import StringIO
-
     return pd.read_csv(StringIO("\n".join(lines)), sep="\t", dtype=str, keep_default_na=False)
 
 
@@ -91,13 +88,11 @@ def _find_feature_column(df: pd.DataFrame) -> str | None:
     for name in preferred:
         if name in df.columns:
             return name
-    if len(df.columns):
-        return str(df.columns[0])
-    return None
+    return str(df.columns[0]) if len(df.columns) else None
 
 
 def _find_symbol_column(df: pd.DataFrame) -> str | None:
-    preferred = ["gene_symbol", "symbol", "Gene Symbol", "gene", "gene_name", "GeneName"]
+    preferred = ["gene_symbol", "symbol", "Symbol", "Gene Symbol", "gene", "gene_name", "GeneName"]
     for name in preferred:
         if name in df.columns:
             return name
@@ -110,6 +105,25 @@ def _find_refseq_column(df: pd.DataFrame) -> str | None:
         if name in df.columns:
             return name
     return None
+
+
+def _extract_description_symbol(description: object, tss_symbols: set[str]) -> str:
+    """Recover the gene symbol from GPL19972's RefSeq-style Description field.
+
+    GPL19972 exposes ID, GB_ACC and Description but no explicit Symbol column.
+    The Description commonly contains the symbol in parentheses, e.g.
+    '... (Zfp85-rs1), mRNA'. We prefer parenthesized tokens that are present in
+    the independently supplied TSS gene-symbol namespace.
+    """
+    text = str(description).strip()
+    if not text:
+        return ""
+    candidates = re.findall(r"\(([^()]*)\)", text)
+    for candidate in candidates:
+        key = _norm_symbol(candidate)
+        if key in tss_symbols:
+            return key
+    return ""
 
 
 def _candidate_platform_tables(root: Path) -> list[Path]:
@@ -157,14 +171,14 @@ def _summarise_ids(ids: pd.Index) -> dict:
 def _build_mapping_report(expression_ids: pd.Index, tss: pd.DataFrame, platform: pd.DataFrame | None) -> tuple[pd.DataFrame, dict]:
     expr = pd.DataFrame({"expression_id": [str(x) for x in expression_ids]})
     expr["symbol_norm"] = expr.expression_id.map(_norm_symbol)
-    expr["refseq_norm"] = expr.expression_id.map(_norm_refseq)
 
     tss_gene = tss["gene"].astype(str)
-    tss_by_symbol = {}
+    tss_by_symbol: dict[str, list[str]] = {}
     for value in tss_gene:
         key = _norm_symbol(value)
         if key:
             tss_by_symbol.setdefault(key, []).append(value)
+    tss_symbols = set(tss_by_symbol)
     expr["tss_symbol_match"] = expr.symbol_norm.map(lambda x: len(tss_by_symbol.get(x, [])))
     expr["tss_symbol_examples"] = expr.symbol_norm.map(lambda x: ";".join(tss_by_symbol.get(x, [])[:5]))
 
@@ -178,44 +192,46 @@ def _build_mapping_report(expression_ids: pd.Index, tss: pd.DataFrame, platform:
             "feature_column": feature_col,
             "symbol_column": symbol_col,
             "refseq_column": refseq_col,
+            "description_column": "Description" if "Description" in platform.columns else None,
             "n_rows": int(len(platform)),
         }
+        p = platform.copy()
         if feature_col:
-            p = platform.copy()
             p["feature_norm"] = p[feature_col].map(_norm_refseq)
-            if symbol_col:
-                p["symbol_norm"] = p[symbol_col].map(_norm_symbol)
-            else:
-                p["symbol_norm"] = ""
-            if refseq_col:
-                p["refseq_norm"] = p[refseq_col].map(_norm_refseq)
-            else:
-                p["refseq_norm"] = p["feature_norm"]
-            p = p.drop_duplicates("feature_norm")
-            by_feature = p.set_index("feature_norm")
-            expr["platform_feature_match"] = expr.refseq_norm.isin(by_feature.index).astype(int)
-            if symbol_col:
-                expr["platform_symbol"] = expr.refseq_norm.map(by_feature["symbol_norm"])
-            else:
-                expr["platform_symbol"] = ""
-            expr["platform_symbol"] = expr["platform_symbol"].fillna("")
-            expr["platform_symbol_tss_match"] = expr.platform_symbol.map(lambda x: int(bool(x) and x in tss_by_symbol))
         else:
-            expr["platform_feature_match"] = 0
-            expr["platform_symbol"] = ""
-            expr["platform_symbol_tss_match"] = 0
-    else:
+            p["feature_norm"] = ""
+        if symbol_col:
+            p["symbol_norm"] = p[symbol_col].map(_norm_symbol)
+        elif "Description" in p.columns:
+            p["symbol_norm"] = p["Description"].map(lambda x: _extract_description_symbol(x, tss_symbols))
+        else:
+            p["symbol_norm"] = ""
+        if refseq_col:
+            p["refseq_norm"] = p[refseq_col].map(_norm_refseq)
+        else:
+            p["refseq_norm"] = p["feature_norm"]
+        p["symbol_norm"] = p["symbol_norm"].fillna("")
+        p = p.drop_duplicates("feature_norm")
+        by_symbol = p[p.symbol_norm != ""].drop_duplicates("symbol_norm")
+        platform_symbols = set(by_symbol.symbol_norm)
+        expr["platform_symbol_match"] = expr.symbol_norm.isin(platform_symbols).astype(int)
+        expr["platform_symbol"] = expr.symbol_norm.where(expr.symbol_norm.isin(platform_symbols), "")
+        expr["platform_symbol_tss_match"] = expr.platform_symbol.map(lambda x: int(bool(x) and x in tss_symbols))
         expr["platform_feature_match"] = pd.NA
+        platform_info["n_symbols_recovered"] = int(len(platform_symbols))
+        platform_info["n_symbols_matching_tss"] = int(len(platform_symbols & tss_symbols))
+    else:
+        expr["platform_symbol_match"] = pd.NA
         expr["platform_symbol"] = ""
         expr["platform_symbol_tss_match"] = pd.NA
+        expr["platform_feature_match"] = pd.NA
 
     summary = {
         "expression_id_summary": _summarise_ids(expression_ids),
         "tss_gene_count": int(len(tss_gene)),
         "tss_unique_normalized_symbols": int(len(tss_by_symbol)),
-        "expression_exact_symbol_overlap": int((expr.tss_symbol_match > 0).sum()),
         "expression_case_insensitive_symbol_overlap": int((expr.tss_symbol_match > 0).sum()),
-        "expression_platform_feature_matches": None if platform is None else int(expr.platform_feature_match.fillna(0).sum()),
+        "expression_platform_symbol_matches": None if platform is None else int(expr.platform_symbol_match.fillna(0).sum()),
         "expression_platform_symbol_to_tss_matches": None if platform is None else int(expr.platform_symbol_tss_match.fillna(0).sum()),
         "platform": platform_info,
     }
@@ -287,8 +303,10 @@ def main() -> None:
         print(f"GPL19972 platform annotation: {platform_path}")
         print(f"Platform format: {summary['platform_format']}")
         print(f"Platform rows: {len(platform)}")
-        print(f"Platform feature matches: {summary['expression_platform_feature_matches']}")
-        print(f"Platform-symbol to TSS matches: {summary['expression_platform_symbol_to_tss_matches']}")
+        print(f"Platform symbols recovered: {summary['platform']['n_symbols_recovered']}")
+        print(f"Platform symbols matching TSS: {summary['platform']['n_symbols_matching_tss']}")
+        print(f"Common-space expression symbols found in platform: {summary['expression_platform_symbol_matches']}")
+        print(f"Common-space expression symbols mapped to TSS via platform: {summary['expression_platform_symbol_to_tss_matches']}")
     print(f"Outputs: {out}")
 
 
