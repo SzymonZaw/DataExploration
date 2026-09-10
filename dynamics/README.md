@@ -43,6 +43,8 @@ Optional context/perturbation `u(t)` and history `h(t)` can be provided to the t
 - `Z6_GSE67462_MECHANISTIC_INTERPRETATION_PROTOCOL.md` — protocol and interpretation boundaries for mechanistic hypothesis generation.
 - `run_z6_gse67462_temporal_modules.py` — clusters the multimodal mechanistic core into reproducible temporal expression modules.
 - `Z6_GSE67462_TEMPORAL_MODULE_PROTOCOL.md` — protocol for temporal-module stability and interpretation.
+- `run_z6_gse67462_temporal_enrichment.py` — reproducible GO/Reactome/KEGG/nuisance over-representation audit for temporal modules using explicit GMT files.
+- `Z6_GSE67462_TEMPORAL_ENRICHMENT_PROTOCOL.md` — statistical and provenance protocol for temporal-module enrichment.
 - `../run_z6_predictive_transition.py` — dedicated Z6 executable wrapper.
 
 ## Z6 predictive transition benchmark
@@ -134,6 +136,26 @@ python -m dynamics.run_z6_gse67462_temporal_modules `
 ```
 
 The analysis tests several cluster counts and reports adjusted-Rand agreement between them. Module labels such as `early_declining`, `late_rising` and `transient` are descriptive summaries of the observed centroids, not mechanistic assignments. Pathway interpretation should follow this stability audit and use an explicitly versioned gene-set collection.
+
+## GSE67462 temporal-module enrichment
+
+Functional interpretation is performed only for modules with at least 20 genes. The current six-module solution therefore treats M1, M3, M4 and M6 as primary enrichment targets and keeps M2/M5 as small modules without stable pathway inference.
+
+The enrichment audit uses the full provenance-validated GSE67462 expression universe as the hypergeometric background, a minimum overlap of five genes, and Benjamini-Hochberg correction across all module × term hypotheses within each gene-set collection. GO Biological Process, Reactome, KEGG and nuisance/context collections are supplied explicitly as versioned GMT files.
+
+Example:
+
+```powershell
+python -m dynamics.run_z6_gse67462_temporal_enrichment `
+  --gtf Data\GSE67520\mm9.refGene.gtf.gz `
+  --platform-soft Data\GPL19972_family.soft.gz `
+  --go Data\GeneSets\GO_BP_mouse.gmt `
+  --reactome Data\GeneSets\Reactome_mouse.gmt `
+  --kegg Data\GeneSets\KEGG_mouse.gmt `
+  --nuisance Data\GeneSets\nuisance_mouse.gmt
+```
+
+The exact GMT files and SHA-256 hashes are recorded in the generated manifest. No pathway database is silently downloaded, and enrichment does not modify frozen Z6 support.
 
 ## Research constraints
 
