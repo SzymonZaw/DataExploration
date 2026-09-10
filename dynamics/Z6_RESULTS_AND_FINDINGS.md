@@ -2,9 +2,9 @@
 
 ## Status
 
-This document records the current empirical findings for objective Z6: testing whether the learned biological-state representation supports genuine out-of-sample prediction of future cellular state.
+This document records the versioned empirical findings for objective Z6 and is now **scientifically closed for the current experimental program**. The final synthesis is recorded separately in `dynamics/Z6_FINAL_SYNTHESIS.md`.
 
-The results below are **versioned experimental findings**, not a claim that Z6 is scientifically complete.
+Z6 tests whether a learned biological-state representation supports genuine out-of-sample prediction of future cellular state, whether predictive information transfers across systems, and whether the observed predictive/multimodal structure supports a defensible mechanistic interpretation.
 
 ## 1. Experimental logic
 
@@ -32,11 +32,9 @@ The frozen predictive-support rule requires all of the following:
 - positive mean and q05 improvement versus linear extrapolation;
 - temporal permutation p < 0.05.
 
-No dataset was removed from the primary Phase 0 benchmark because of a negative result, and the Phase 0.1 audit does not change the model, preprocessing, baselines or support thresholds.
+No dataset was removed from the primary benchmark because of a negative result, and subsequent audits did not change the model, preprocessing, baselines or support thresholds.
 
 ## 2. Phase 0 — leave-one-dataset-out benchmark
-
-### Result
 
 The frozen LODO benchmark did **not** establish predictive support for any tested model.
 
@@ -48,28 +46,11 @@ The frozen LODO benchmark did **not** establish predictive support for any teste
 | memory | 0.913102 | 0.147592 | -0.174806 | 0.113582 | 0.016180 | 1.154961 | 0.313292 | 0.996004 | false |
 | pca | 1.107466 | -0.046772 | -0.316259 | -0.080782 | -0.417815 | 0.960597 | 0.256811 | 1.000000 | false |
 
-### Interpretation
+Phase 0 is therefore a valid negative result under strict leave-one-dataset-out validation. It does not show that cellular dynamics are absent or that Z6 is impossible; it shows that the current representation and models do not demonstrate cross-dataset future-state prediction under the frozen protocol.
 
-Phase 0 is a valid negative result under strict leave-one-dataset-out validation. It does **not** show that cellular dynamics are absent and does not show that Z6 is impossible. It shows that the current representation and models do not demonstrate cross-dataset future-state prediction under the frozen protocol.
+## 3. Phase 0.1 — within-system transferability
 
-The result motivates separating two hypotheses:
-
-- **H-Z6a:** the representation contains insufficient predictive information even within a biological system.
-- **H-Z6b:** predictive information exists within a biological system but does not transfer across independent datasets/platforms/organisms.
-
-## 3. Phase 0.1 — within-system transferability audit
-
-### Purpose
-
-Phase 0.1 changes only the validation unit. Instead of training on all but one dataset, the audit trains on one independent temporal branch and predicts the other branch within each dataset. The model, preprocessing, free-rollout task, baselines, permutation test and support rule remain frozen.
-
-The three eligible systems were:
-
-- **GSE28688:** paired HFF1/OSKM branches `a` and `b`, 4 timepoints each (0, 24, 48, 72 h).
-- **GSE67462:** replicate branches `1` and `2`, 8 timepoints each (0, 24, 72, 120, 168, 264, 360, 432 h).
-- **GSE297234:** donor branches `aged` and `young`, 4 timepoints each (0, 72, 168, 240 h). These are treated as donor holdouts, not technical replicates.
-
-### Results by system
+Phase 0.1 changed only the validation unit. Training on one independent temporal branch and predicting the other was performed while keeping the predictive task, preprocessing, models, baselines, permutation test and support rule frozen.
 
 | System | Autoencoder | Delta-t | Markov | Memory | PCA |
 |---|---|---|---|---|---|
@@ -77,129 +58,143 @@ The three eligible systems were:
 | GSE67462 | **true** | false | false | false | **true** |
 | GSE297234 | false | false | false | false | false |
 
-### GSE28688
+The decisive result is that predictive support is **system-specific rather than consistently reproduced across all three systems**.
 
-No model reached predictive support. The models nevertheless showed positive mean improvements over persistence, but none passed the complete frozen criterion, including the required lower-tail and permutation constraints.
+The preferred empirical interpretation is therefore:
 
-### GSE67462
+> Predictive information can exist in the learned representation within a biological system, but its transferability across independent biological and experimental systems is not demonstrated and appears to depend on context.
 
-Two representations reached full predictive support:
+This is a working empirical conclusion, not a universal biological law.
 
-**Autoencoder**
+## 4. Context specificity and signal attribution
 
-- mean improvement vs persistence: **0.408949**
-- q05 vs persistence: **0.343518**
-- mean improvement vs nearest-time: **0.111096**
-- q05 vs nearest-time: **0.016143**
-- mean improvement vs linear: **2.767563**
-- q05 vs linear: **2.551851**
-- permutation p: **0.000999**
+Within GSE67462, predictive information is predominantly associated with a reproducible common dynamic expression component rather than branch-specific structure. The context-specificity audit classified GSE67462 as a reproducible transition, while the broader comparison showed mixed context dependence across systems.
 
-**PCA**
+This supports the interpretation that the positive GSE67462 prediction is not simply an arbitrary branch artifact. It does not establish that the common dynamic component is biologically specific rather than a reproducible property of this experimental system.
 
-- mean improvement vs persistence: **0.456518**
-- q05 vs persistence: **0.447309**
-- mean improvement vs nearest-time: **0.158665**
-- q05 vs nearest-time: **0.129416**
-- mean improvement vs linear: **2.815133**
-- q05 vs linear: **2.665125**
-- permutation p: **0.000999**
+## 5. Multimodal validation
 
-Both therefore satisfy the frozen `predictive_support=True` rule.
+The GSE67462 transition shows robust multimodal dynamic concordance for:
 
-### GSE297234
+- H3K27ac;
+- H3K4me3;
+- RNAPII;
+- OCT4.
 
-No model reached predictive support. Improvements over persistence were small or negative, and the lower-tail criteria and permutation tests did not support robust prediction.
+The validated expression universe contains 11,048 of 11,899 common-space genes (92.85%) after the explicit GPL19972 → gene-symbol → mm9 TSS mapping chain.
 
-## 4. Transferability summary
+Assignment-robustness analysis supports the main multimodal result. H3K27me3 was retained as a negative control and did not provide positive multimodal support.
 
-| Model | Systems with positive mean | Systems with positive q05 | Systems with permutation support |
-|---|---:|---:|---:|
-| autoencoder | 2/3 | 2/3 | 1/3 |
-| delta_t | 3/3 | 2/3 | 1/3 |
-| markov | 3/3 | 1/3 | 0/3 |
-| memory | 3/3 | 2/3 | 0/3 |
-| pca | 2/3 | 2/3 | 1/3 |
+This establishes a reproducible multimodal temporal signature, but it remains observational association rather than causal evidence.
 
-The decisive observation is that predictive support is **system-specific rather than consistently reproduced across all three systems**.
+## 6. Temporal modules and functional structure
 
-## 5. Current scientific conclusion
+The multimodal core resolves into six stable temporal modules, with M1, M3, M4 and M6 sufficiently large for primary functional interpretation.
 
-### H-Z6a is not supported as a general explanation
+- **M1:** early transient ECM/mesenchymal remodeling, growth-factor and receptor/adhesion signaling. Strong EMT-Hallmark similarity is present, but transition direction is not established.
+- **M4:** late-rising ECM, cytoskeletal, trafficking, RAC1/RHO, integrin and RTK-associated remodeling.
+- **M6:** late-rising module with strong OCT4 and RNAPII association, together with epithelialization/cornified-envelope and cholesterol-metabolism signals. Pluripotency-related enrichment is present but not sufficiently specific to support a pluripotency claim.
+- **M3:** mixed functional structure with weaker category-level support.
 
-The within-system positive result in GSE67462 is a counterexample to the strong statement that the current representation contains no predictive information even within a biological system.
+These results support a multi-phase description of the GSE67462 transition rather than a single scalar trajectory.
 
-Thus, the current evidence does **not** justify concluding that the representation is intrinsically non-predictive.
+## 7. Mechanistic hypothesis and falsification audits
 
-### H-Z6b is currently the preferred working interpretation
+Mechanistic falsification supports descriptive hypotheses for M1 and M4, while M6 remains mixed and epithelialization-dominant.
 
-The combination of:
+Accordingly:
 
-- negative cross-dataset Phase 0 results;
-- positive within-system support in GSE67462;
-- negative within-system results in GSE28688 and GSE297234;
+- M1 may be described as an ECM/mesenchymal-remodeling program;
+- M4 may be described as structural/trafficking remodeling;
+- M6 may be described as a late epithelialization-dominant program with OCT4-associated transcriptional structure and competing metabolic/pluripotency interpretations.
 
-supports the more specific interpretation that **predictive information can exist in the learned representation within a biological system but is not demonstrably transferable across the tested independent systems**.
+These are mechanistic hypotheses, not causal mechanisms.
 
-This should be treated as a **working empirical conclusion**, not as a universal biological law.
+### 7.1 Aggregate directional falsification
 
-## 6. What the result does not establish
+The directional audit tested whether regulatory trajectories at time `t` improve prediction of expression at `t+1` beyond same-time association and circular time-shift null expectations.
 
-The current Z6 evidence does **not** establish:
+No primary module showed a positive lead-gain result that exceeded the null with statistical support.
+
+Thus, concurrent multimodal association was reproducible, but temporal precedence was not demonstrated.
+
+### 7.2 Replicate-level directional falsification
+
+The replicate-level audit independently tested the expression response in the two GSE67462 expression replicates. For all active modalities in M1, M4 and M6, no active modality achieved both `above_null=True` in both replicates and `p<0.05` in both replicates.
+
+The sole formal positive case was H3K27me3 in M4. Because H3K27me3 is the predefined negative-control modality, this result cannot be used as evidence for an activating regulatory mechanism.
+
+The replicate audit therefore strengthens the negative directional conclusion.
+
+The exact machine-readable outputs are retained under:
+
+`results/Dynamics/z6_gse67462_replicate_directional_audit/`
+
+with protocol:
+
+`dynamics/Z6_GSE67462_REPLICATE_DIRECTIONAL_PROTOCOL.md`
+
+## 8. Final scientific conclusion
+
+> **The learned biological-state representation contains predictive information that is reproducible within selected biological systems, but this predictive information is not demonstrably transferable across the independent systems tested. In GSE67462, predictive information is associated with a reproducible multimodal temporal structure that resolves into stable functional modules. However, neither aggregate nor replicate-level directional analyses provide reproducible evidence that the measured regulatory signals temporally precede transcriptional changes. The representation therefore supports context-dependent predictive state modeling, while causal or mechanistic interpretation of the inferred transitions remains unsupported by the present observational evidence.**
+
+## 9. What Z6 establishes
+
+Z6 provides evidence that:
+
+1. future-state prediction can succeed within a biological system under strict out-of-sample validation;
+2. such predictive support is not uniformly transferable across independent systems;
+3. predictive information in GSE67462 is associated with a reproducible common dynamic component;
+4. GSE67462 contains a robust multimodal temporal signature across enhancer, chromatin, transcriptional and OCT4-associated measurements;
+5. this signature can be decomposed into stable temporal modules with interpretable functional structure;
+6. functional and mechanistic analyses can generate bounded hypotheses without being promoted to causal claims;
+7. directional and replicate-level falsification provide evidence against claiming a validated regulator→expression temporal mechanism from these data alone.
+
+## 10. What Z6 does not establish
+
+Z6 does not establish:
 
 - a universal biological trajectory;
+- a universally transferable latent state;
 - causal state transitions;
-- mechanistic validity of the latent dynamics;
-- biological specificity of the predictive signal;
-- transferability across species, platforms or experimental protocols;
-- superiority of the learned representation in every biological context.
+- a validated regulator→chromatin→expression chain;
+- biological specificity of every predictive feature;
+- pluripotency as the unique interpretation of M6;
+- EMT or MET directionality from enrichment similarity alone;
+- transferability across species, platforms or protocols;
+- that negative directional evidence proves absence of molecular regulation.
 
-In particular, predictive performance alone is insufficient evidence of biological specificity. The unresolved Z4/H3 control problem remains relevant before a positive predictive result can be interpreted as specifically biological.
+## 11. Scientific implication for the thesis
 
-## 7. Scientific implications for the thesis
+The main methodological result of Z6 is not discovery of a universal trajectory. It is the demonstration that **predictive representation, biological specificity and mechanistic validity are separate validation layers**.
 
-The current result shifts the Z6 question from:
+A state representation can be internally predictive but context-dependent; multimodally coherent without being causally validated; and temporally structured without supporting a universal ordering of molecular events.
 
-> Can one learned state representation predict cellular trajectories universally?
+This directly supports the thesis objective of separating biological state from context-dependent and technical information.
 
- toward the more falsifiable question:
+## 12. Frozen boundaries
 
-> Under which biological, experimental and observational conditions does a learned state representation contain information that supports prediction of future cellular state, and which components of that information transfer across independent systems?
+The following were not changed by the final mechanistic audits:
 
-This is consistent with the broader thesis objective of separating biological state from context-dependent and technical effects rather than treating every temporally predictive signal as biological state.
+- Phase 0 predictive-support thresholds;
+- Phase 0.1 validation splits;
+- model architectures;
+- preprocessing rules;
+- baseline definitions;
+- permutation framework;
+- dataset inclusion;
+- multimodal support criterion;
+- temporal module assignment;
+- earlier positive/negative decisions.
 
-## 8. Phase 0.1 technical audit closure
+The final synthesis is therefore an integration of versioned results, not a redefinition of the experiments.
 
-During the initial Phase 0.1 run, `model_benchmark.py` emitted `RuntimeWarning: All-NaN slice encountered` from `training_statistics()` while computing the feature-wise median used for training-set imputation.
+## 13. Provenance
 
-The warning source was identified as columns that were entirely non-finite within the training trajectories. The implementation was changed to detect all-NaN columns explicitly, compute the median only for columns with at least one finite value, and retain the existing downstream fallback of `0.0` for all-NaN columns.
+Primary predictive outputs remain under the corresponding `results/Dynamics/z6_*` directories. The methodological specifications and final synthesis are versioned under `dynamics/`.
 
-The corrected benchmark was rerun with the complete Phase 0.1 protocol. The warning disappeared and **all reported numerical results remained identical** to the pre-fix run, including RMSE values, baseline improvements, q05 statistics, permutation p-values and predictive-support decisions for every system/model combination.
+See also:
 
-Therefore the warning was a preprocessing diagnostic artifact and did not affect the Phase 0.1 scientific conclusions. The predictive-support rule, model architecture, preprocessing protocol, baselines, validation branches and dataset inclusion were not relaxed or changed.
+`dynamics/Z6_FINAL_SYNTHESIS.md`
 
-Phase 0.1 is therefore considered **technically closed and stable**, while its scientific interpretation remains subject to the limitations documented above.
-
-## 9. Next required audit before extending the model
-
-With the NaN warning resolved, the next step should **not** be architecture expansion or threshold relaxation. The scientifically relevant follow-up is to investigate representation/context dependence and the unresolved biological-specificity problem (Z4/H3), especially whether the positive GSE67462 prediction reflects transferable biological state information or system-specific temporal/context structure.
-
-Any follow-up must preserve the frozen Phase 0/0.1 results as a reference point and must not retroactively redefine predictive support.
-
-## 10. Provenance
-
-Primary machine-readable outputs from Phase 0.1 are stored under:
-
-`results/Dynamics/z6_within_system_audit/`
-
-including branch inventory, fold-level metrics, model summaries, support decisions and the protocol snapshot.
-
-The methodological specification is recorded in:
-
-`dynamics/Z6_WITHIN_SYSTEM_TRANSFERABILITY_PROTOCOL.md`
-
-The primary Z6 protocol is recorded in:
-
-`dynamics/Z6_PREDICTIVE_TRANSITION_PROTOCOL.md`
-
-This document is the human-readable scientific interpretation of those versioned experimental artifacts.
+This document and the final synthesis together constitute the current closure of the Z6 experimental program.
