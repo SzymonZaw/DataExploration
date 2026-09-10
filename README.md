@@ -16,13 +16,13 @@ The **Digital Biological Twin** is a downstream demonstrator of the methodology,
 
 ### Primary formulation
 
-> **AI-driven discovery of conserved and context-dependent dynamical mechanisms of cellular reprogramming from heterogeneous multi-omics data.**
+> **Representation of dynamic biological state from heterogeneous omics data using machine learning methods for modeling and prediction of cellular-state transitions.**
 
 ### Broader methodological formulation
 
-> **AI-driven discovery of dynamical mechanisms of cell-state transitions from heterogeneous biological data.**
+> **Development and validation of methods for representing dynamic biological state from heterogeneous omics data in order to model and predict cellular-state transitions.**
 
-The second formulation is intentionally broader. It allows cellular reprogramming to remain the main experimental case while making the scientific contribution applicable to other biological state transitions, perturbation responses and cell-fate decisions.
+Cellular reprogramming is the primary biological case study. The methodological contribution is intended to remain applicable to other biological state transitions, perturbation responses and cell-fate decisions.
 
 ---
 
@@ -60,7 +60,7 @@ One of the main scientific goals is to determine **which parts of this model are
 
 ## Central research question
 
-> **Can artificial intelligence, biological knowledge and mathematical dynamical modeling be combined to identify a minimal, interpretable state representation and discover mechanisms that predict cellular-state transitions across heterogeneous experiments?**
+> **Can heterogeneous omics observations be transformed into a minimal, interpretable representation of dynamic biological state that supports modeling and prediction of cellular-state transitions across independent experiments?**
 
 Secondary questions include:
 
@@ -69,174 +69,140 @@ Secondary questions include:
 - When is the current cellular state sufficient to predict its future, and when is historical information required?
 - Can early molecular signals identify an approaching state transition before the final phenotype is established?
 - Which genes, regulatory modules or molecular processes are most informative about the future state?
-- Can competing mechanistic hypotheses be generated, quantitatively compared and falsified against independent observations?
-- Can AI identify the most informative perturbation or sampling time for distinguishing competing mechanisms?
+- Can the learned representation support prediction of future state or transition under held-out conditions?
+- Which mechanistic interpretations of the learned dynamics are supported or falsified by independent observations?
 
 ---
 
 ## Main objective
 
-> **To develop and validate an AI-assisted mathematical framework for discovering dynamical mechanisms of cellular-state transitions by integrating heterogeneous biological measurements, biological knowledge and perturbation information, while explicitly modeling uncertainty, context dependence and cellular history.**
+> **To develop and validate a computational methodology for representing dynamic biological state from heterogeneous omics data, integrating complementary molecular information into a common and biologically interpretable state representation, and using that representation to model and predict cellular-state transitions while separating biological signal from context-dependent and technical effects.**
 
-The framework should move from observations toward increasingly mechanistic representations:
+The framework should move from observations toward increasingly predictive and mechanistically interpretable representations:
 
 ```text
-HETEROGENEOUS BIOLOGICAL DATA
+HETEROGENEOUS OMICS DATA
             ↓
    BIOLOGICAL HARMONIZATION
             ↓
-   AI / KNOWLEDGE-GUIDED
-      REPRESENTATION
+   STATE REPRESENTATION
             ↓
-       LATENT STATE z
+       DYNAMIC STATE
             ↓
      STATE TRANSITIONS
             ↓
-    DYNAMICAL MODEL F
-            ↓
-  COMPETING MECHANISTIC
-       HYPOTHESES
+    DYNAMICAL MODELING
             ↓
  PREDICTION + UNCERTAINTY
             ↓
-       FALSIFICATION
+ INDEPENDENT VALIDATION
             ↓
- INFORMATIVE PERTURBATION /
-       TIME POINT
+ MECHANISTIC INTERPRETATION
             ↓
  DIGITAL BIOLOGICAL TWIN
 ```
 
-The Digital Biological Twin represents the final application layer of this chain.
+The Digital Biological Twin represents the final application layer of this chain, not the primary scientific claim.
 
 ---
 
 # Scientific objectives
 
-## Objective 1 — Construct a biologically meaningful state representation
+## Objective 1 — Construct a biologically meaningful representation of dynamic biological state
 
-Develop methods that transform heterogeneous measurements into a representation of cellular state:
+Develop methods that transform heterogeneous omics measurements into a common representation of biological state:
 
 \[
 x(t) \rightarrow z(t).
 \]
 
+The representation should be stable, biologically interpretable, comparable across experiments and sensitive to genuine changes in biological state.
+
 Potential inputs include bulk RNA-seq, microarray expression, scRNA-seq, ATAC-seq, ChIP-seq/CUT&Tag, histone marks, regulatory features, proteomics and perturbation metadata.
 
-Candidate approaches include latent-factor models, variational models, contrastive learning, foundation-model embeddings, knowledge-guided representation learning, multimodal integration and module/pathway representations.
-
-The representation must be evaluated by **out-of-sample biological prediction**, not only by reconstruction quality or visualization.
+The representation must be evaluated by **out-of-sample biological validation**, not only by reconstruction quality or visualization.
 
 ---
 
-## Objective 2 — Separate conserved and context-dependent dynamics
+## Objective 2 — Integrate heterogeneous omics layers into a common state representation
 
-Instead of assuming one universal trajectory, investigate a decomposition such as:
+Develop and evaluate methods for integrating complementary molecular layers into a representation that preserves biologically relevant information while limiting modality-, platform- and experiment-specific effects.
+
+Candidate approaches include latent-factor models, variational models, contrastive learning, knowledge-guided representation learning, multimodal integration and module/pathway representations.
+
+A central criterion is whether information learned from one modality or dataset remains informative when evaluated on independently held-out data.
+
+---
+
+## Objective 3 — Model the dynamics of biological state
+
+Represent biological state as a time-dependent object:
 
 \[
-F_d = F_{shared} + F_{context,d}.
+z(t_0),z(t_1),\ldots,z(t_k).
 \]
 
-Determine which dynamical features are reproducible across independent experiments, cell types, organisms, protocols, perturbations and measurement modalities.
+Characterize the direction, rate, temporal structure, transition points, stabilization and trajectory similarity of state changes.
 
-A central criterion is whether a component learned from some datasets remains informative for a completely held-out dataset.
-
----
-
-## Objective 3 — Identify conserved biological transition modules
-
-Determine whether small biological modules exhibit reproducible temporal behavior even when global trajectories differ.
-
-Candidate processes include:
-
-- epithelial–mesenchymal transition / mesenchymal–epithelial transition,
-- proliferation and MYC-associated programs,
-- metabolic remodeling,
-- chromatin and enhancer remodeling,
-- pluripotency networks,
-- stress responses,
-- extracellular matrix and adhesion,
-- growth-factor signaling.
-
-Quantify activation onset, peak time, rate of change, ordering, interactions, persistence and reproducibility across experiments.
-
-Biological modules are treated as hypotheses or priors, not as predefined proof of mechanism.
+Determine which aspects of the observed temporal structure are reproducible across independent experiments and which are context-dependent.
 
 ---
 
-## Objective 4 — Model perturbation-dependent dynamics
+## Objective 4 — Separate biological signal from technical and context-dependent effects
 
-Extend the state representation from \(z(t)\) to \(z(t,u)\), where \(u\) represents a perturbation such as transcription-factor induction, drug treatment, environmental change or genetic intervention.
+Develop methods for distinguishing biological state changes from technical variation and nonspecific temporal or experimental effects, including batch effects, delivery-related responses, stress, inflammatory responses and other nuisance processes.
 
-The goal is to determine whether AI can predict how perturbation changes the future distribution or trajectory of cellular states.
+The goal is not to remove every context-dependent signal, but to determine which variation represents biological state, which is experimental context, and which should not be interpreted as evidence for a conserved transition mechanism.
 
-This provides a bridge between observational trajectory reconstruction and mechanistic experimentation.
+Validation should use independent and biologically orthogonal controls whenever possible.
 
 ---
 
-## Objective 5 — Determine when cellular history matters
+## Objective 5 — Validate the state representation across independent biological systems
 
-Test whether cellular dynamics can be modeled as approximately Markovian:
+Test whether the learned representation captures biological state rather than experiment-specific structure.
+
+Validation should include held-out time points, replicates, datasets and, where possible, biologically independent systems or perturbations.
+
+A successful representation should provide reproducible biological information and improve prediction beyond meaningful baselines without relying on information leakage.
+
+---
+
+## Objective 6 — Model and predict cellular-state transitions
+
+Use the dynamic state representation to model transitions:
 
 \[
-z_{t+1}=F(z_t,u_t),
+z(t) \rightarrow z(t+\Delta t).
 \]
 
-or whether prediction requires historical information:
+Evaluate whether the current state is sufficient to predict future state and, where necessary, whether prediction requires information about cellular history or previous perturbations.
 
-\[
-z_{t+1}=F(z_t,z_{t-1},\ldots,u_t).
-\]
+Compare persistence, nearest-time observation, linear extrapolation and appropriate conventional/statistical models against learned dynamical models.
 
-Potential sources of memory include chromatin state, epigenetic memory, persistent regulatory programs, metabolic state and previous perturbations.
-
-This creates a mathematically explicit framework for studying when a current-state representation is sufficient and when a state-plus-history representation is necessary.
+The central criterion is **out-of-sample prediction of future biological state**, not correlation with time alone.
 
 ---
 
-## Objective 6 — Discover and falsify mechanistic models
+## Objective 7 — Identify and evaluate mechanistic interpretations of learned dynamics
 
-AI systems will be used to construct **competing mechanistic hypotheses** rather than only a single predictive model.
+Use biological knowledge and quantitative modeling to translate reproducible state dynamics into candidate regulatory, pathway or mechanistic explanations.
 
-A hypothesis should be represented as:
+Candidate model classes may include state-space models, probabilistic dynamical systems, ordinary or stochastic differential equations, Neural ODEs and symbolic regression/sparse equation discovery.
 
-```text
-biological evidence
-       ↓
-mechanistic hypothesis
-       ↓
-mathematical representation
-       ↓
-predictions
-       ↓
-uncertainty / counter-evidence
-       ↓
-independent validation
-```
+Mechanistic interpretations must generate testable predictions and be compared against independent observations. An interpretable model or equation is treated as a hypothesis, not as proof of causality.
 
-Candidate model classes include ordinary and stochastic differential equations, state-space models, probabilistic dynamical systems, Neural ODEs and related neural dynamical models, optimal-transport models of population-state transitions, and symbolic regression/sparse equation discovery.
-
-LLMs may assist with literature-grounded hypothesis generation, biological interpretation and evidence synthesis, but **LLM output is never treated as biological ground truth**.
+LLMs may assist with literature-grounded hypothesis generation and biological interpretation, but **LLM output is never treated as biological ground truth**.
 
 ---
 
-## Objective 7 — Active selection of informative experiments
+## Objective 8 — Demonstrate predictive and mechanistic utility in a Digital Biological Twin framework
 
-A key long-term objective is to move from passive analysis toward **active scientific discovery**.
+Integrate the validated state representation, transition model, uncertainty estimates and mechanistic interpretation into a demonstrator of a **Digital Biological Twin**.
 
-For competing hypotheses \(H_1,H_2,\ldots,H_k\), an experiment \(e\) can be evaluated by expected information gain:
+The demonstrator should show how heterogeneous observations can be mapped to a current biological state and how that state can be used to reason about plausible future states and cellular-state transitions.
 
-\[
-e^* = \arg\max_e \operatorname{EIG}(e).
-\]
-
-Candidate experiments may differ in gene/module perturbation, perturbation strength, perturbation timing, measurement modality, sampling time and cell population.
-
-The aim is to answer questions such as:
-
-> **Which gene/module and which time point would most strongly discriminate between two competing mechanisms?**
-
-This creates a direct bridge between computational inference and future wet-lab validation.
+Active experiment selection, optimal perturbation and expected-information-gain methods are treated as **long-term extensions** of this framework rather than mandatory core deliverables of the PhD.
 
 ---
 
