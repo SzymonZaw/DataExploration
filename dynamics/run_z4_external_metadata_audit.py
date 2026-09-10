@@ -15,25 +15,15 @@ from pathlib import Path
 import pandas as pd
 
 GEO_URL = "https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}/{accession}/soft/{accession}_family.soft.gz"
-
 EXPECTED = {
-    "GSE297234": {
-        "min_timepoints": 3,
-        "keywords": ["oskm", "sendai"],
-        "role": "primary_external_target",
-    },
-    "GSE28688": {
-        "min_timepoints": 3,
-        "keywords": ["oskm"],
-        "role": "specificity_context_challenge",
-    },
+    "GSE297234": {"min_timepoints": 3, "keywords": ["oskm", "sendai"], "role": "primary_external_target"},
+    "GSE28688": {"min_timepoints": 3, "keywords": ["oskm"], "role": "specificity_context_challenge"},
 }
 
 
 def _url(accession: str) -> str:
     n = int(re.search(r"\d+", accession).group())
-    prefix = f"GSE{n // 1000}nnn"
-    return GEO_URL.format(prefix=prefix, accession=accession)
+    return GEO_URL.format(prefix=f"GSE{n // 1000}nnn", accession=accession)
 
 
 def _download(accession: str, cache: Path) -> Path:
@@ -46,8 +36,7 @@ def _download(accession: str, cache: Path) -> Path:
 
 
 def _parse_soft(path: Path) -> pd.DataFrame:
-    rows = []
-    current = None
+    rows, current = [], None
     with gzip.open(path, "rt", encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.rstrip("\n")
@@ -65,11 +54,9 @@ def _parse_soft(path: Path) -> pd.DataFrame:
             elif line.startswith("!Sample_source_name_ch1 = "):
                 current["source"] = line.split("=", 1)[1].strip()
             elif line.startswith("!Sample_characteristics_ch1 = "):
-                value = line.split("=", 1)[1].strip()
-                current.setdefault("characteristics", []).append(value)
+                current.setdefault("characteristics", []).append(line.split("=", 1)[1].strip())
         if current:
             rows.append(current)
-
     df = pd.DataFrame(rows)
     if "characteristics" in df:
         df["characteristics"] = df["characteristics"].apply(lambda x: " | ".join(x) if isinstance(x, list) else "")
@@ -77,16 +64,14 @@ def _parse_soft(path: Path) -> pd.DataFrame:
 
 
 def _infer_time(text: str):
-    patterns = [
+    for pattern, conv in [
         (r"day\s*([0-9]+)", lambda x: float(x)),
-        (r"d\s*([0-9]+)", lambda x: float(x)),
+        (r"\bd\s*([0-9]+)\b", lambda x: float(x)),
         (r"([0-9]+)\s*h(?:ours?)?", lambda x: float(x) / 24.0),
-    ]
-    low = text.lower()
-    for pattern, conv in patterns:
-        m = re.search(pattern, low)
-        if m:
-            return conv(m.group(1))
+    ]:
+        match = re.search(pattern, text.lower())
+        if match:
+            return conv(match.group(1))
     return None
 
 
@@ -96,13 +81,7 @@ def _audit(accession: str, df: pd.DataFrame) -> dict:
     inferred = text.map(_infer_time)
     n_times = int(inferred.dropna().nunique())
     intervention_hits = sum(any(k in t.lower() for k in cfg["keywords"]) for t in text)
-    nuisance_cols = {
-        "sample_id": "sample_id" in df.columns,
-        "title": "title" in df.columns,
-        "source": "source" in df.columns,
-        "platform": "platform" in df.columns,
-        "characteristics": "characteristics" in df.columns,
-    }
+    nuisance_cols = {c: c in df.columns for c in ["sample_id", "title", "source", "platform", "characteristics"]}
     return {
         "candidate": accession,
         "role": cfg["role"],
@@ -124,21 +103,18 @@ def main():
     ap.add_argument("--output", default=None)
     args = ap.parse_args()
 
-    cache = Path(args.cache)
-    soft = _download(args.candidate, cache)
+    soft = _download(args.candidate, Path(args.cache))
     df = _parse_soft(soft)
     audit = _audit(args.candidate, df)
-
-    # Add deterministic inferred time only as an audit field; it is not used for transfer.
     text = df.fillna("").astype(str).agg(" | ".join, axis=1)
     df["inferred_time_days"] = text.map(_infer_time)
 
     out = Path(args.output) if args.output else Path("results/Dynamics/z4_external_metadata_audit") / args.candidate
     out.mkdir(parents=True, exist_ok=True)
     df.to_csv(out / "metadata.csv", index=False)
-    (out / "metadata_raw.txt").write_text(soft.read_bytes().decode("utf-8", errors="replace"), encoding="utf-8")
+    with gzip.open(soft, "rt", encoding="utf-8", errors="replace") as fh:
+        (out / "metadata_raw.txt").write_text(fh.read(), encoding="utf-8")
     (out / "audit.json").write_text(json.dumps(audit, indent=2), encoding="utf-8")
-
     print(json.dumps(audit, indent=2))
     print(f"metadata: {out / 'metadata.csv'}")
     print(f"audit: {out / 'audit.json'}")
