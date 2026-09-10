@@ -78,12 +78,9 @@ def _matrix_by_modality(values, expression_times, genes):
 
 
 def _gene_effects(expr: pd.DataFrame, reg: pd.DataFrame, genes: list[str], module: int, modality: str) -> pd.DataFrame:
-    times = [t for t in reg.index if t in expr.index]
-    times = sorted(times)
+    times = sorted([t for t in reg.index if t in expr.index])
     if len(times) < 3:
         return pd.DataFrame()
-    lead_times = times[:-1]
-    next_times = times[1:]
     rows = []
     expected_sign = -1.0 if modality == NEGATIVE else 1.0
     for gene in genes:
@@ -144,10 +141,9 @@ def _circular_null(expr: pd.DataFrame, reg: pd.DataFrame, genes: list[str], obse
     return q95, p, float(np.median(arr))
 
 
-def _summarise(effects: pd.DataFrame, permutations: int, rng: np.random.Generator, expr: pd.DataFrame, matrices: dict, assignments: pd.DataFrame):
+def _summarise(permutations: int, rng: np.random.Generator, expr: pd.DataFrame, matrices: dict, assignments: pd.DataFrame):
     gene_rows = []
     mod_rows = []
-    module_rows = []
     perm_rows = []
     for module in MODULES:
         module_genes = sorted(set(assignments.loc[assignments.module.astype(int) == module, "gene"].astype(str)) & set(expr.columns))
@@ -174,8 +170,6 @@ def _summarise(effects: pd.DataFrame, permutations: int, rng: np.random.Generato
                 "lead_gain_exceeds_null": bool(np.isfinite(observed) and np.isfinite(q95) and observed > q95),
             })
             perm_rows.append({"module": module, "modality": modality, "observed_median_lead_gain": observed, "null_q95": q95, "null_median": null_median, "permutation_p": p, "permutations": permutations})
-        if gene_rows:
-            pass
     gene_effects = pd.concat(gene_rows, ignore_index=True) if gene_rows else pd.DataFrame()
     modality_summary = pd.DataFrame(mod_rows)
     module_rows = []
@@ -253,12 +247,12 @@ def main() -> None:
     missing = [m for m in ALL_TESTED if not files[m]]
     if missing:
         raise RuntimeError(f"Missing modality files: {missing}")
-    values_raw, provenance = _build_modality_matrix(files, tss)
+    values_raw, _ = _build_modality_matrix(files, tss)
     values = _normalise_values(values_raw, validated)
     matrices = _matrix_by_modality(values, list(expr.index), list(expr.columns))
     assignments = pd.read_csv(args.assignments)
     rng = np.random.default_rng(SEED)
-    gene_effects, modality_summary, module_summary, perm_summary = _summarise(gene_effects=pd.DataFrame(), permutations=args.permutations, rng=rng, expr=expr, matrices=matrices, assignments=assignments)
+    gene_effects, modality_summary, module_summary, perm_summary = _summarise(permutations=args.permutations, rng=rng, expr=expr, matrices=matrices, assignments=assignments)
     gene_effects.to_csv(out / "01_gene_directional_effects.csv", index=False)
     modality_summary.to_csv(out / "02_modality_summary.csv", index=False)
     module_summary.to_csv(out / "03_module_directional_summary.csv", index=False)
