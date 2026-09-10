@@ -85,7 +85,8 @@ def main():
     if any(c not in activity.columns for c in ALL_ORDER): raise ValueError(f"Gene-activity matrix missing samples: {sorted(set(ALL_ORDER)-set(activity.columns))}")
     time_days=np.array([sample_day(c) for c in TIME_ORDER],float)
     score_rows=[]; module_rows=[]
-    for module in sorted(pd.to_numeric(modules.module,errors="coerce").dropna().astype(int).unique()):
+    module_ids=sorted(pd.to_numeric(modules.module,errors="coerce").dropna().astype(int).unique())
+    for module in module_ids:
         mg=modules.loc[pd.to_numeric(modules.module,errors="coerce")==module,"gene_norm"].unique()
         human=sorted({mouse_to_human[g] for g in mg if g in mouse_to_human and mouse_to_human[g] in activity.index})
         if not human: continue
@@ -102,12 +103,18 @@ def main():
     scores=pd.DataFrame(score_rows); summary=pd.DataFrame(module_rows).sort_values("module")
     scores.to_csv(out/"01_orthogonal_module_scores.csv",index=False); summary.to_csv(out/"02_orthogonal_module_summary.csv",index=False)
     evaluable=summary[summary.frozen_reference_direction.notna()].copy(); valid_cov=bool(len(summary)>0 and (summary.validated_human_genes>=3).all())
-    if evaluable.empty or not valid_cov: decision="Z4_ORTHO_UNRESOLVED"
+    passed=evaluable.direction_concordant.astype(bool)&(evaluable.permutation_p_directional<0.05) if not evaluable.empty else pd.Series(dtype=bool)
+    n_pass=int(passed.sum())
+    if evaluable.empty or not valid_cov:
+        decision="Z4_ORTHO_UNRESOLVED"
+    elif len(evaluable) < len(module_ids):
+        decision="Z4_ORTHO_PARTIAL"
+    elif n_pass == len(evaluable):
+        decision="Z4_ORTHO_SUPPORTED"
     else:
-        passed=evaluable.direction_concordant.astype(bool)&(evaluable.permutation_p_directional<0.05); n_pass=int(passed.sum())
-        decision="Z4_ORTHO_SUPPORTED" if n_pass==len(evaluable) else ("Z4_ORTHO_PARTIAL" if n_pass>0 else "Z4_ORTHO_FAILED")
-    result={"candidate":"GSE242421","activity_input":str(a.activity),"frozen_mapping":str(a.mapping),"frozen_modules":str(a.modules),"reference_direction_file":ref_path,"modules_evaluated":int(len(summary)),"modules_with_frozen_direction":int(len(evaluable)),"modules_passing_directional_null":int(((evaluable.direction_concordant.astype(bool))&(evaluable.permutation_p_directional<0.05)).sum()) if not evaluable.empty else 0,"target_samples":ALL_ORDER,"continuous_test_samples":TIME_ORDER,"endpoint_iPSC_reported_separately":True,"permutation_n":a.permutations,"seed":a.seed,"module_fitting_on_target":False,"feature_selection_on_target":False,"frozen_rule_unchanged":True,"decision":decision,"interpretation":"ORTHOGONAL_MOLECULAR_CORROBORATION_ONLY"}
+        decision="Z4_ORTHO_FAILED"
+    result={"candidate":"GSE242421","activity_input":str(a.activity),"frozen_mapping":str(a.mapping),"frozen_modules":str(a.modules),"reference_direction_file":ref_path,"modules_evaluated":int(len(summary)),"modules_with_frozen_direction":int(len(evaluable)),"modules_passing_directional_null":n_pass,"target_samples":ALL_ORDER,"continuous_test_samples":TIME_ORDER,"endpoint_iPSC_reported_separately":True,"permutation_n":a.permutations,"seed":a.seed,"module_fitting_on_target":False,"feature_selection_on_target":False,"frozen_rule_unchanged":True,"decision":decision,"interpretation":"ORTHOGONAL_MOLECULAR_CORROBORATION_ONLY"}
     (out/"03_summary.json").write_text(json.dumps(result,indent=2),encoding="utf-8")
-    print("GSE242421 Z4 ORTHOGONAL FROZEN-MODULE TEST"); print(f"modules evaluated: {len(summary)}"); print(f"modules with frozen direction: {len(evaluable)}"); print(f"modules passing directional permutation test: {result['modules_passing_directional_null']}"); print(f"reference direction file: {ref_path or 'NOT FOUND'}"); print(f"decision: {decision}"); print(f"output: {out}")
+    print("GSE242421 Z4 ORTHOGONAL FROZEN-MODULE TEST"); print(f"modules evaluated: {len(summary)}"); print(f"modules with frozen direction: {len(evaluable)}"); print(f"modules passing directional permutation test: {n_pass}"); print(f"reference direction file: {ref_path or 'NOT FOUND'}"); print(f"decision: {decision}"); print(f"output: {out}")
 
 if __name__=="__main__": main()
