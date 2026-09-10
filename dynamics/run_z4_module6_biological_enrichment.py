@@ -15,7 +15,21 @@ DEFAULT_ACTIVITY = Path("results/Dynamics/z4_gse242421_gene_activity/01_gene_act
 DEFAULT_OUT = Path("results/Dynamics/z4_module6_biological_enrichment")
 TIME_ORDER = ["D0","D2","D4","D6","D8","D10","D12","D14"]
 
-def norm(x: object) -> str: return str(x).strip().upper()
+def norm(x: object) -> str:
+    return str(x).strip().upper()
+
+def flatten_values(x):
+    if x is None:
+        return []
+    if isinstance(x, (list, tuple)):
+        out=[]
+        for v in x:
+            out.extend(flatten_values(v))
+        return out
+    if isinstance(x, str):
+        # Some API encodings use a semicolon-delimited string.
+        return [v for v in x.split(";") if v]
+    return [str(x)]
 
 def gprofiler(genes, organism, background, sources, insecure_ssl=False):
     payload = {"organism": organism, "query": [str(g) for g in genes], "sources": sources,
@@ -26,7 +40,7 @@ def gprofiler(genes, organism, background, sources, insecure_ssl=False):
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request("https://biit.cs.ut.ee/gprofiler/api/gost/profile/", data=data,
         headers={"Content-Type":"application/json","Accept":"application/json",
-                 "User-Agent":"DataExploration-Z4-Module6/1.3"}, method="POST")
+                 "User-Agent":"DataExploration-Z4-Module6/1.4"}, method="POST")
     ctx = ssl._create_unverified_context() if insecure_ssl else None
     try:
         with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
@@ -36,15 +50,14 @@ def gprofiler(genes, organism, background, sources, insecure_ssl=False):
         raise RuntimeError(f"g:Profiler HTTP {e.code}: {body}") from e
     rows=[]
     for r in (obj.get("result") or []):
-        intersections = r.get("intersections") or []
-        flat=[]
-        for item in intersections:
-            if isinstance(item, (list, tuple)): flat.extend(str(v) for v in item)
-            else: flat.append(str(item))
+        # `intersection` contains the actual query gene identifiers.
+        # `intersections` can contain evidence annotations; do not confuse them with genes.
+        genes_hit = flatten_values(r.get("intersection"))
         rows.append({"source":r.get("source"),"native":r.get("native"),"name":r.get("name"),
                      "p_value":r.get("p_value"),"significant":r.get("significant"),
                      "intersection_size":r.get("intersection_size"),"term_size":r.get("term_size"),
-                     "effective_domain_size":r.get("effective_domain_size"),"intersection":";".join(flat)})
+                     "effective_domain_size":r.get("effective_domain_size"),
+                     "intersection":";".join(genes_hit)})
     return pd.DataFrame(rows)
 
 def temporal_core(activity, genes, quantile=0.75):
@@ -62,6 +75,33 @@ def temporal_core(activity, genes, quantile=0.75):
     df["core_cutoff_quantile"]=quantile; df["core_cutoff_value"]=cutoff
     return df.sort_values("signed_spearman",ascending=False)
 
+def build_term_gene_audit(enrichment_files, m6_mouse, m6_human, core_genes, mouse_to_human, out):
+    m6_mouse_set=set(m6_mouse); m6_human_set=set(m6_human); core_set=set(core_genes)
+    rows=[]
+    for label, path in enrichment_files.items():
+        if not path.exists(): continue
+        df=pd.read_csv(path)
+        for _,r in df.iterrows():
+            hits=set(norm(x) for x in flatten_values(r.get("intersection")) if str(x).strip())
+            if label == "mouse_frozen_module":
+                module_hits=hits & m6_mouse_set
+                human_hits={mouse_to_human[g] for g in module_hits if g in mouse_to_human and mouse_to_human[g] in m6_human_set}
+                core_hits={mouse_to_human[g] for g in module_hits if g in mouse_to_human and mouse_to_human[g] in core_set}
+            else:
+                module_hits=hits & m6_human_set
+                human_hits=module_hits
+                core_hits=module_hits & core_set
+            rows.append({"analysis":label,"source":r.get("source"),"native":r.get("native"),"name":r.get("name"),
+                         "p_value":r.get("p_value"),"significant":r.get("significant"),
+                         "reported_intersection_size":r.get("intersection_size"),
+                         "intersection_genes":";".join(sorted(hits)),"module6_gene_hits":";".join(sorted(module_hits)),
+                         "module6_gene_hit_count":len(module_hits),"validated_human_hits":";".join(sorted(human_hits)),
+                         "validated_human_hit_count":len(human_hits),"target_core_hits":";".join(sorted(core_hits)),
+                         "target_core_hit_count":len(core_hits)})
+    audit=pd.DataFrame(rows)
+    audit.to_csv(out/"06_module6_term_gene_audit.csv",index=False)
+    return audit
+
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("--modules",type=Path,default=DEFAULT_MODULES)
     ap.add_argument("--mapping",type=Path,default=DEFAULT_MAPPING); ap.add_argument("--activity",type=Path,default=DEFAULT_ACTIVITY)
@@ -78,20 +118,24 @@ def main():
     m6_human=sorted({mouse_to_human[g] for g in m6_mouse if g in mouse_to_human and mouse_to_human[g] in activity.index})
     core=temporal_core(activity,m6_human,a.core_quantile); core_genes=core.loc[core.core_temporal,"gene"].tolist() if not core.empty else []
     mouse_bg=sorted(frozen.mouse_norm.unique()); human_bg=sorted(set(frozen.human_norm)&set(activity.index))
-    summary={"candidate":"GSE242421","module":a.module,"frozen_mouse_genes":len(m6_mouse),"validated_human_genes":len(m6_human),"target_samples":TIME_ORDER,
+    summary={"candidate":"GSE242421","module":a.module,"frozen_mouse_genes":len(m6_mouse),"validated_human_genes":len(m6_human),"target_core_temporal_genes":len(core_genes),"target_samples":TIME_ORDER,
       "target_module_fitting":False,"target_gene_selection":False,"core_definition":f"top {(1-a.core_quantile)*100:.0f}% by signed D0-D14 Spearman within frozen validated module genes",
       "interpretation_only":True,"z4_decision_unchanged":"Z4_ORTHO_THRESHOLD_SENSITIVE","gprofiler":not a.skip_gprofiler,"insecure_ssl_requested":a.insecure_ssl}
     core.to_csv(out/"01_module6_target_gene_ranking.csv",index=False)
     pd.DataFrame({"mouse_gene":m6_mouse,"human_gene":[mouse_to_human.get(g,"") for g in m6_mouse]}).to_csv(out/"02_module6_frozen_orthology.csv",index=False)
     pd.DataFrame({"gene":core_genes}).to_csv(out/"03_module6_core_temporal_genes.csv",index=False)
+    enrichment_files={"mouse_frozen_module":out/"04_mouse_frozen_module_enrichment.csv","human_validated_module":out/"04_human_validated_module_enrichment.csv","human_target_core":out/"04_human_target_core_enrichment.csv"}
     if not a.skip_gprofiler:
         results={}
         for label,genes,org,bg in [("mouse_frozen_module",m6_mouse,"mmusculus",mouse_bg),("human_validated_module",m6_human,"hsapiens",human_bg),("human_target_core",core_genes,"hsapiens",human_bg)]:
             try:
                 df=gprofiler(genes,org,bg,["GO:BP","REAC"],a.insecure_ssl) if len(genes)>=3 else pd.DataFrame()
-                df.to_csv(out/f"04_{label}_enrichment.csv",index=False); results[label]={"status":"OK","n_genes":len(genes),"n_terms":len(df)}
+                df.to_csv(enrichment_files[label],index=False); results[label]={"status":"OK","n_genes":len(genes),"n_terms":len(df)}
             except Exception as e: results[label]={"status":"ERROR","n_genes":len(genes),"error":str(e)}
         summary["enrichment_results"]=results
+    audit=build_term_gene_audit(enrichment_files,m6_mouse,m6_human,core_genes,mouse_to_human,out)
+    summary["term_gene_audit"]={"status":"OK","n_rows":len(audit),"terms_with_module6_hits":int((audit.module6_gene_hit_count>0).sum()) if not audit.empty else 0,
+      "terms_with_target_core_hits":int((audit.target_core_hit_count>0).sum()) if not audit.empty else 0}
     (out/"05_summary.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
     print("GSE242421 Z4 MODULE 6 BIOLOGICAL ENRICHMENT AUDIT"); print(f"frozen mouse genes: {len(m6_mouse)}"); print(f"validated human genes: {len(m6_human)}")
     print(f"target core temporal genes: {len(core_genes)}"); print("decision unchanged: Z4_ORTHO_THRESHOLD_SENSITIVE"); print(f"output: {out}")
