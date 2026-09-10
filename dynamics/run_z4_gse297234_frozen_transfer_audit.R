@@ -17,16 +17,26 @@ dir.create(dirname(out_meta), recursive=TRUE, showWarnings=FALSE)
 obj <- readRDS(rds)
 meta <- obj[[]]
 assay <- if ("RNA" %in% names(obj@assays)) "RNA" else DefaultAssay(obj)
+assay_obj <- obj[[assay]]
 
-# Seurat v5 may expose an existing but empty `data` layer. Treat an empty
-# layer as unavailable and fall back explicitly to counts. Align cells by
-# cell names rather than positional logical indexing because assay layers can
-# have a different cell universe/order from the object metadata.
-layer_names <- Layers(obj[[assay]])
-preferred <- intersect(c("data", "counts"), layer_names)
+# Seurat v5 stores expression in named layers, while legacy Assay objects
+# expose counts/data through slots. Some converted objects can report no
+# useful RNA layers even though a legacy counts slot is present. Prefer a
+# non-empty normalized/data layer, then counts, and support both APIs.
+layer_names <- tryCatch(Layers(assay_obj), error=function(e) character(0))
+message("assay class: ", paste(class(assay_obj), collapse=";"))
+message("reported layers: ", if (length(layer_names)) paste(layer_names, collapse=",") else "<none>")
+
+candidate_layers <- character(0)
+if (length(layer_names)) {
+  data_layers <- layer_names[grepl("^data($|\\.)", layer_names, ignore.case=TRUE)]
+  count_layers <- layer_names[grepl("^counts($|\\.)", layer_names, ignore.case=TRUE)]
+  candidate_layers <- unique(c(data_layers, count_layers, layer_names))
+}
+
 mat <- NULL
 used_layer <- NULL
-for (layer in preferred) {
+for (layer in candidate_layers) {
   candidate <- tryCatch(LayerData(obj, assay=assay, layer=layer), error=function(e) NULL)
   if (!is.null(candidate) && nrow(candidate) > 0L && ncol(candidate) > 0L) {
     mat <- candidate
@@ -34,11 +44,27 @@ for (layer in preferred) {
     break
   }
 }
-if (is.null(mat)) stop("No non-empty RNA assay layer found; checked: ", paste(preferred, collapse=", "))
+
+# Legacy Seurat Assay fallback.
+if (is.null(mat)) {
+  for (slot_name in c("data", "counts")) {
+    candidate <- tryCatch(GetAssayData(obj, assay=assay, slot=slot_name), error=function(e) NULL)
+    if (!is.null(candidate) && nrow(candidate) > 0L && ncol(candidate) > 0L) {
+      mat <- candidate
+      used_layer <- paste0("legacy_slot:", slot_name)
+      break
+    }
+  }
+}
+
+if (is.null(mat)) {
+  stop("No non-empty RNA expression matrix found; reported layers: ",
+       if (length(layer_names)) paste(layer_names, collapse=",") else "<none>")
+}
 
 common_cells <- intersect(colnames(mat), rownames(meta))
 if (length(common_cells) == 0L) {
-  stop("No overlapping cell names between assay layer and Seurat metadata")
+  stop("No overlapping cell names between assay expression matrix and Seurat metadata")
 }
 mat <- mat[, common_cells, drop=FALSE]
 meta <- meta[common_cells, , drop=FALSE]
@@ -52,7 +78,7 @@ samples <- samples[keep]
 
 sample_levels <- unique(samples)
 message("Seurat assay: ", assay)
-message("layer: ", used_layer)
+message("expression source: ", used_layer)
 message("cells: ", ncol(mat), "; genes: ", nrow(mat), "; samples: ", length(sample_levels))
 
 # Sparse sample pseudobulk mean expression.
