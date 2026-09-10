@@ -41,6 +41,8 @@ Optional context/perturbation `u(t)` and history `h(t)` can be provided to the t
 - `Z6_GSE67462_IDENTIFIER_MAPPING_AUDIT_PROTOCOL.md` — protocol and interpretation rules for the identifier-provenance audit.
 - `run_z6_gse67462_mechanistic_interpretation.py` — diagnostic ranking of multimodally coherent genes and optional pathway/nuisance enrichment.
 - `Z6_GSE67462_MECHANISTIC_INTERPRETATION_PROTOCOL.md` — protocol and interpretation boundaries for mechanistic hypothesis generation.
+- `run_z6_gse67462_temporal_modules.py` — clusters the multimodal mechanistic core into reproducible temporal expression modules.
+- `Z6_GSE67462_TEMPORAL_MODULE_PROTOCOL.md` — protocol for temporal-module stability and interpretation.
 - `../run_z6_predictive_transition.py` — dedicated Z6 executable wrapper.
 
 ## Z6 predictive transition benchmark
@@ -97,22 +99,15 @@ Run:
 
 ```powershell
 python -m dynamics.run_z6_gse67462_identifier_mapping_audit `
-  --gtf Data\GSE67520\mm9.refGene.gtf.gz
-```
-
-If a local GPL19972 annotation table is available, pass it explicitly:
-
-```powershell
-python -m dynamics.run_z6_gse67462_identifier_mapping_audit `
   --gtf Data\GSE67520\mm9.refGene.gtf.gz `
-  --platform-table Data\GSE67462\GPL19972.txt.gz
+  --platform-soft Data\GPL19972_family.soft.gz
 ```
 
-This audit is diagnostic only. It does not change frozen Z6 predictive support or any threshold. A missing platform annotation is reported as incomplete provenance, not as a biological negative result.
+This audit is diagnostic only. It does not change frozen Z6 predictive support or any threshold.
 
 ## GSE67462 mechanistic interpretation audit
 
-The current multimodal result establishes robust within-system molecular coherence, but not causality. The mechanistic audit therefore ranks genes that are jointly coherent across H3K27ac, H3K4me3, RNAPII and OCT4, while keeping H3K27me3 as a contrasting negative-control modality.
+The current multimodal result establishes robust within-system molecular coherence, but not causality. The mechanistic audit ranks genes that are jointly coherent across H3K27ac, H3K4me3, RNAPII and OCT4, while keeping H3K27me3 as a contrasting negative-control modality.
 
 Run:
 
@@ -122,16 +117,23 @@ python -m dynamics.run_z6_gse67462_mechanistic_interpretation `
   --platform-soft Data\GPL19972_family.soft.gz
 ```
 
-The main output is:
-
-```text
-results\Dynamics\z6_gse67462_mechanistic_interpretation\
-  GSE67462_Z6_mechanistic_interpretation_report.md
-```
-
 The audit produces gene-level multimodal scores, candidate regulatory-lead genes, and optional pathway/nuisance enrichment. Pathway enrichment is performed only when an explicitly versioned GMT file is supplied; no external database is silently downloaded.
 
-The output is **hypothesis-generating**. In particular, an OCT4-associated or chromatin-associated trajectory does not establish causal regulation. The appropriate claim is that the GSE67462 transition contains a multimodally coherent molecular core suitable for mechanistic follow-up.
+The output is **hypothesis-generating**. An OCT4-associated or chromatin-associated trajectory does not establish causal regulation.
+
+## GSE67462 temporal modules
+
+The next interpretation layer groups the multimodal core into temporal modules before assigning biological pathway labels. This prevents individual-gene cherry-picking and separates early, transient and late expression programs using the actual observed trajectory.
+
+Run:
+
+```powershell
+python -m dynamics.run_z6_gse67462_temporal_modules `
+  --gtf Data\GSE67520\mm9.refGene.gtf.gz `
+  --platform-soft Data\GPL19972_family.soft.gz
+```
+
+The analysis tests several cluster counts and reports adjusted-Rand agreement between them. Module labels such as `early_declining`, `late_rising` and `transient` are descriptive summaries of the observed centroids, not mechanistic assignments. Pathway interpretation should follow this stability audit and use an explicitly versioned gene-set collection.
 
 ## Research constraints
 
