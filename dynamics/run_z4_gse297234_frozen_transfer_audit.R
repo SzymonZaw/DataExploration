@@ -18,19 +18,41 @@ obj <- readRDS(rds)
 meta <- obj[[]]
 assay <- if ("RNA" %in% names(obj@assays)) "RNA" else DefaultAssay(obj)
 
-# Prefer normalized RNA data. If unavailable, fall back to counts and let the
-# Python audit operate on the resulting sample-level matrix.
-mat <- tryCatch(GetAssayData(obj, assay=assay, layer="data"), error=function(e) NULL)
-if (is.null(mat)) mat <- GetAssayData(obj, assay=assay, layer="counts")
+# Seurat v5 may expose an existing but empty `data` layer. Treat an empty
+# layer as unavailable and fall back explicitly to counts. Align cells by
+# cell names rather than positional logical indexing because assay layers can
+# have a different cell universe/order from the object metadata.
+layer_names <- Layers(obj[[assay]])
+preferred <- intersect(c("data", "counts"), layer_names)
+mat <- NULL
+used_layer <- NULL
+for (layer in preferred) {
+  candidate <- tryCatch(LayerData(obj, assay=assay, layer=layer), error=function(e) NULL)
+  if (!is.null(candidate) && nrow(candidate) > 0L && ncol(candidate) > 0L) {
+    mat <- candidate
+    used_layer <- layer
+    break
+  }
+}
+if (is.null(mat)) stop("No non-empty RNA assay layer found; checked: ", paste(preferred, collapse=", "))
+
+common_cells <- intersect(colnames(mat), rownames(meta))
+if (length(common_cells) == 0L) {
+  stop("No overlapping cell names between assay layer and Seurat metadata")
+}
+mat <- mat[, common_cells, drop=FALSE]
+meta <- meta[common_cells, , drop=FALSE]
 
 sample_col <- if ("orig.ident" %in% colnames(meta)) "orig.ident" else colnames(meta)[1]
 samples <- as.character(meta[[sample_col]])
 keep <- !is.na(samples) & nzchar(samples)
 mat <- mat[, keep, drop=FALSE]
+meta <- meta[keep, , drop=FALSE]
 samples <- samples[keep]
 
 sample_levels <- unique(samples)
 message("Seurat assay: ", assay)
+message("layer: ", used_layer)
 message("cells: ", ncol(mat), "; genes: ", nrow(mat), "; samples: ", length(sample_levels))
 
 # Sparse sample pseudobulk mean expression.
@@ -43,7 +65,7 @@ write.csv(as.data.frame(pb), out_expr, quote=FALSE)
 meta_out <- data.frame(sample=names(idx), n_cells=vapply(idx, length, integer(1)), stringsAsFactors=FALSE)
 # Preserve donor/time/state fields when they are constant within sample.
 for (col in intersect(c("age_group","age_ident","cell_state","PartialReprog1","NonReprog1","EarlyPluripotency1","Pluripotency1","orig.ident"), colnames(meta))) {
-  vals <- tapply(as.character(meta[[col]][keep]), samples, function(x) paste(unique(x), collapse=";"))
+  vals <- tapply(as.character(meta[[col]]), samples, function(x) paste(unique(x), collapse=";"))
   meta_out[[col]] <- unname(vals[meta_out$sample])
 }
 write.csv(meta_out, out_meta, row.names=FALSE, quote=FALSE)
