@@ -16,8 +16,10 @@ import pandas as pd
 DEFAULT_SCORES = "results/Dynamics/z6_gse67462_mechanistic_interpretation/01_gene_multimodal_scores.csv"
 DEFAULT_ASSIGNMENTS = "results/Dynamics/z6_gse67462_temporal_modules/03_gene_module_assignments.csv"
 DEFAULT_MODULES = "results/Dynamics/z6_gse67462_temporal_modules/02_temporal_modules.csv"
-DEFAULT_SPECIFICITY = "results/Dynamics/z6_gse67462_specificity_audit/03_category_gene_coverage.csv"
-DEFAULT_LEADING = "results/Dynamics/z6_gse67462_specificity_audit/02_leading_genes.csv"
+# The specificity audit writes 03_leading_genes.csv and 04_category_gene_coverage.csv.
+# The previous defaults were off by one, which silently produced zero coverage.
+DEFAULT_SPECIFICITY = "results/Dynamics/z6_gse67462_specificity_audit/04_category_gene_coverage.csv"
+DEFAULT_LEADING = "results/Dynamics/z6_gse67462_specificity_audit/03_leading_genes.csv"
 DEFAULT_OUT = "results/Dynamics/z6_gse67462_mechanistic_falsification"
 
 ACTIVE = ["h3k27ac", "h3k4me3", "rnapii", "total_oct4"]
@@ -61,7 +63,7 @@ def _module_summary(assignments: pd.DataFrame, scores: pd.DataFrame, coverage: p
             row[f"fraction_rho_{m}_ge_0_30"] = float((v >= 0.30).mean()) if v.notna().any() else np.nan
         row["fraction_3plus_active_modalities"] = float((sub["active_count"] >= 3).mean()) if len(sub) else np.nan
         for cat in COMPETING:
-            c = coverage[(coverage.module == int(module)) & (coverage.category == cat)]
+            c = coverage[(pd.to_numeric(coverage.module, errors="coerce") == int(module)) & (coverage.category == cat)]
             row[f"coverage_{cat}"] = float(c.iloc[0].leading_fraction_of_module) if not c.empty else 0.0
             row[f"coverage_rho_{cat}"] = float(c.iloc[0].median_multimodal_rho) if not c.empty else np.nan
         rows.append(row)
@@ -73,8 +75,6 @@ def _m6_score(summary: pd.DataFrame) -> pd.DataFrame:
     if r.empty:
         return pd.DataFrame()
     row = r.iloc[0]
-    # These are deliberately transparent diagnostic scores, not probabilities.
-    # Category coverage is weighted by multimodal coherence; OCT4 is reported separately.
     scores = []
     for cat in COMPETING:
         cov = float(row.get(f"coverage_{cat}", 0.0))
@@ -117,7 +117,6 @@ def _decisions(summary: pd.DataFrame, m6: pd.DataFrame) -> pd.DataFrame:
         second_cov = ranked[1][1] if len(ranked) > 1 else 0.0
         core = float(row.get("fraction_3plus_active_modalities", 0.0))
         if module == 6:
-            # Do not call pluripotency supported unless it is competitive with epithelialization.
             epi = vals.get("EPITHELIALIZATION", 0.0)
             plur = vals.get("PLURIPOTENCY_STEM", 0.0)
             if epi > 0 and plur > 0 and epi >= plur * 1.5:
