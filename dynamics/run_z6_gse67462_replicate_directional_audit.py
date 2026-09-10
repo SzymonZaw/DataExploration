@@ -21,7 +21,6 @@ from dynamics.run_z6_gse67462_identifier_mapping_audit import (
     _read_soft_platform,
 )
 from dynamics.run_z6_gse67462_multimodal_validation_analysis import (
-    MODALITIES,
     _build_modality_matrix,
     _discover_files,
     _load_tss,
@@ -101,31 +100,59 @@ def _gene_effects(expr: pd.DataFrame, reg: pd.DataFrame, genes: list[str], modul
     return pd.DataFrame(rows)
 
 
+def _standardise_rank_columns(frame: pd.DataFrame):
+    """Return column-wise rank vectors centred and normalised for fast rho."""
+    ranked = frame.rank(axis=0, method="average", na_option="keep").to_numpy(float)
+    means = np.nanmean(ranked, axis=0)
+    centred = ranked - means
+    norms = np.sqrt(np.nansum(centred * centred, axis=0))
+    good = norms > 0
+    scaled = np.full_like(centred, np.nan, dtype=float)
+    scaled[:, good] = centred[:, good] / norms[good]
+    return scaled, good
+
+
+def _median_gene_correlations(a: np.ndarray, b: np.ndarray):
+    """Column-wise Pearson/Spearman correlations from rank-standardised arrays."""
+    valid = np.isfinite(a).all(axis=0) & np.isfinite(b).all(axis=0)
+    if not valid.any():
+        return np.nan
+    corr = np.sum(a[:, valid] * b[:, valid], axis=0)
+    return float(np.nanmedian(corr)) if corr.size else np.nan
+
+
 def _null(expr, reg, genes, observed, permutations, rng):
+    """Fast circular-shift null; vectorised across genes and shifts."""
     times = sorted(set(expr.index) & set(reg.index))
     if len(times) < 3 or not np.isfinite(observed):
         return np.nan, np.nan, np.nan
-    e = expr.loc[times, genes]
-    r = reg.loc[times, genes]
-    n = len(times)
-    null = []
-    for _ in range(permutations):
-        shift = int(rng.integers(1, n))
-        rs = r.iloc[np.roll(np.arange(n), shift)]
-        gains = []
-        for g in genes:
-            c = _spearman(rs[g].to_numpy(float), e[g].to_numpy(float))
-            l = _spearman(rs[g].to_numpy(float)[:-1], e[g].to_numpy(float)[1:])
-            if np.isfinite(c) and np.isfinite(l):
-                gains.append(l - c)
-        if gains:
-            null.append(float(np.median(gains)))
-    if not null:
+
+    e = expr.loc[times, genes].astype(float)
+    r = reg.loc[times, genes].astype(float)
+    e_rank, e_good = _standardise_rank_columns(e)
+    r_rank, r_good = _standardise_rank_columns(r)
+    good = e_good & r_good
+    if not good.any():
         return np.nan, np.nan, np.nan
-    a = np.asarray(null)
-    q95 = float(np.quantile(a, .95))
-    p = float((1 + np.sum(a >= observed)) / (1 + len(a)))
-    return q95, p, float(np.median(a))
+
+    e_full = e_rank[:, good]
+    r_full = r_rank[:, good]
+    null = np.empty(permutations, dtype=float)
+    shifts = rng.integers(1, len(times), size=permutations)
+    for i, shift in enumerate(shifts):
+        order = np.roll(np.arange(len(times)), int(shift))
+        rs = r_full[order]
+        concurrent = np.sum(rs * e_full, axis=0)
+        lead = np.sum(rs[:-1] * e_full[1:], axis=0)
+        gains = lead - concurrent
+        null[i] = np.nanmedian(gains)
+
+    null = null[np.isfinite(null)]
+    if not len(null):
+        return np.nan, np.nan, np.nan
+    q95 = float(np.quantile(null, .95))
+    p = float((1 + np.sum(null >= observed)) / (1 + len(null)))
+    return q95, p, float(np.median(null))
 
 
 def _replicate_assignment(matrix, metadata):
@@ -245,6 +272,7 @@ def main():
         "validated_expression_genes": len(validated),
         "permutations": args.permutations,
         "null": "gene-wise circular time shifts excluding shift 0, separately per expression replicate",
+        "null_implementation": "vectorised rank-correlation across genes; one random non-zero circular shift per permutation",
         "replicate_scope": "expression response only; GSE67520 regulatory profiles are not independently replicated",
         "diagnostic_only": True,
         "frozen_z6_support_unchanged": True,
