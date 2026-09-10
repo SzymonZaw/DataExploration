@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,12 @@ def infer_donor(sample, age_group=None):
     return "unresolved"
 
 
+def infer_time_from_sample(sample):
+    """Infer day from the frozen layer/sample identifier, e.g. GM00731_D7."""
+    match = re.search(r"_D(\d+(?:\.\d+)?)$", str(sample).upper())
+    return float(match.group(1)) if match else np.nan
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", default=DEFAULT_INPUT)
@@ -48,12 +55,20 @@ def main():
     else:
         df["donor"] = [infer_donor(s) for s in df["sample"]]
 
+    # The Seurat layer/sample IDs are authoritative for this audit's temporal
+    # ordering because they encode the experimental day directly. The GEO
+    # metadata merge can fail to resolve these derived layer names to GSM IDs.
+    df["sample_time_days"] = df["sample"].map(infer_time_from_sample)
+    if "inferred_time_days" not in df.columns:
+        df["inferred_time_days"] = np.nan
+    df["time_days"] = df["sample_time_days"].where(df["sample_time_days"].notna(), df["inferred_time_days"])
+
     df.to_csv(out / "01_sample_scores_with_donor.csv", index=False)
 
     rows = []
     for (donor, module), g in df.groupby(["donor", "module"]):
-        g = g.dropna(subset=["inferred_time_days"]).sort_values("inferred_time_days")
-        time = g["inferred_time_days"].to_numpy(float)
+        g = g.dropna(subset=["time_days"]).sort_values("time_days")
+        time = g["time_days"].to_numpy(float)
         score = g["score"].to_numpy(float)
         rho = spearman(time, score)
         rows.append({
@@ -61,7 +76,7 @@ def main():
             "module": int(module),
             "n_genes": int(g["n_genes"].max()) if len(g) else 0,
             "n_samples": int(g["sample"].nunique()),
-            "n_timepoints": int(g["inferred_time_days"].nunique()),
+            "n_timepoints": int(g["time_days"].nunique()),
             "time_spearman": rho,
             "monotonic_increasing": bool(np.isfinite(rho) and rho > 0),
             "monotonic_decreasing": bool(np.isfinite(rho) and rho < 0),
@@ -69,7 +84,6 @@ def main():
     summary = pd.DataFrame(rows).sort_values(["module", "donor"])
     summary.to_csv(out / "02_donor_module_transfer_summary.csv", index=False)
 
-    # Compare donor-specific temporal direction for modules available in both donors.
     direction_rows = []
     for module, g in summary.groupby("module"):
         vals = dict(zip(g["donor"], g["time_spearman"]))
@@ -101,7 +115,7 @@ def main():
         "endpoint_independence": "NOT_ESTABLISHED",
         "decision": "Z4_UNRESOLVED",
         "interpretation": "DONOR_STRATIFIED_TRANSFER_DIAGNOSTIC_ONLY",
-        "reason": "The two GSE297234 donors provide independent human biological samples, but donor agreement of frozen module trajectories remains a transfer/replication diagnostic because no independent biological endpoint has been established.",
+        "reason": "The two GSE297234 donors provide independent human biological samples. Temporal ordering is taken from the frozen sample identifiers because the Seurat layer names encode experimental day and may not match GEO GSM identifiers.",
         "frozen_z4_rule_unchanged": True,
     }
     (out / "04_summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
