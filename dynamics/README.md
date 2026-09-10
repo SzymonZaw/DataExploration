@@ -16,6 +16,16 @@ The complete Z6 evidence chain is summarized in:
 
 The methodological conclusion is that representation, multimodal integration, temporal structure, biological specificity, transferability, prediction and mechanism are **separate validation layers**. Success at one layer does not automatically validate the next.
 
+## Z4 external specificity
+
+The GSE297234 donor-stratified transfer audit is now complete as a diagnostic layer. Four of six frozen modules showed the same temporal direction in the aged and young donors, and three of six were positive in both donors. This supports partial donor-level transferability, but does not establish biological specificity because no independent external endpoint was identified in the audited GSE297234 metadata.
+
+The next frozen validation stage is an orthogonal chromatin-accessibility test using GSE242424/GSE242421. The prespecified protocol is:
+
+- `Z4_GSE242424_ORTHOGONAL_ENDPOINT_PROTOCOL.md`
+
+The orthogonal assay is deliberately kept separate from the frozen expression representation. No module redefinition, feature selection or threshold tuning may use the target dataset.
+
 ## Mechanistic falsification closure
 
 The aggregate and replicate-level directional audits are now considered closed. They tested whether regulatory signals reproducibly precede later expression changes under a circular time-shift null.
