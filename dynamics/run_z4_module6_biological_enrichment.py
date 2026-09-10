@@ -12,6 +12,7 @@ import argparse
 import json
 from pathlib import Path
 import ssl
+import urllib.error
 import urllib.request
 import numpy as np
 import pandas as pd
@@ -28,23 +29,57 @@ def norm(x: object) -> str:
     return str(x).strip().upper()
 
 
-def gprofiler(genes: list[str], organism: str, background: list[str] | None, sources: list[str], user_threshold: float = 0.05, insecure_ssl: bool = False) -> pd.DataFrame:
-    payload = {"organism": organism, "query": genes, "sources": sources, "user_threshold": user_threshold, "no_evidences": False, "combined": False}
+def gprofiler(
+    genes: list[str], organism: str, background: list[str] | None,
+    sources: list[str], user_threshold: float = 0.05,
+    insecure_ssl: bool = False,
+) -> pd.DataFrame:
+    payload = {
+        "organism": organism,
+        "query": genes,
+        "sources": sources,
+        "user_threshold": user_threshold,
+        "no_evidences": False,
+        "combined": False,
+    }
+    # Current g:Profiler API requires domain_scope=custom when a custom
+    # statistical background is supplied. See the official API documentation.
     if background:
         payload["background"] = background
+        payload["domain_scope"] = "custom"
+
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request("https://biit.cs.ut.ee/gprofiler/api/gost/profile/", data=data,
-        headers={"Content-Type": "application/json", "User-Agent": "DataExploration-Z4-Module6/1.1"}, method="POST")
+    req = urllib.request.Request(
+        "https://biit.cs.ut.ee/gprofiler/api/gost/profile/",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "DataExploration-Z4-Module6/1.2",
+        },
+        method="POST",
+    )
     context = ssl._create_unverified_context() if insecure_ssl else None
-    with urllib.request.urlopen(req, timeout=60, context=context) as r:
-        obj = json.loads(r.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=60, context=context) as r:
+            obj = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"g:Profiler HTTP {e.code}: {body}") from e
+
     rows = []
     for r in (obj.get("result") or []):
-        rows.append({"source": r.get("source"), "native": r.get("native"), "name": r.get("name"),
-                     "p_value": r.get("p_value"), "significant": r.get("significant"),
-                     "intersection_size": r.get("intersection_size"), "term_size": r.get("term_size"),
-                     "effective_domain_size": r.get("effective_domain_size"),
-                     "intersection": ";".join(r.get("intersections") or [])})
+        rows.append({
+            "source": r.get("source"),
+            "native": r.get("native"),
+            "name": r.get("name"),
+            "p_value": r.get("p_value"),
+            "significant": r.get("significant"),
+            "intersection_size": r.get("intersection_size"),
+            "term_size": r.get("term_size"),
+            "effective_domain_size": r.get("effective_domain_size"),
+            "intersection": ";".join(r.get("intersections") or []),
+        })
     return pd.DataFrame(rows)
 
 
@@ -81,9 +116,11 @@ def main() -> None:
     ap.add_argument("--insecure-ssl", action="store_true",
                     help="Retry g:Profiler with certificate verification disabled; use only when the local CA bundle cannot validate the service certificate.")
     a = ap.parse_args()
-    out = a.output; out.mkdir(parents=True, exist_ok=True)
+    out = a.output
+    out.mkdir(parents=True, exist_ok=True)
     for p in [a.modules, a.mapping, a.activity]:
-        if not p.exists(): raise FileNotFoundError(f"Required input missing: {p}")
+        if not p.exists():
+            raise FileNotFoundError(f"Required input missing: {p}")
 
     modules = pd.read_csv(a.modules)
     mapping = pd.read_csv(a.mapping)
@@ -91,9 +128,12 @@ def main() -> None:
     activity.index = activity.index.map(norm)
     activity = activity[~activity.index.duplicated(keep="first")]
 
-    if not {"module", "gene"}.issubset(modules.columns): raise ValueError("Module table must contain module and gene")
-    if not {"human_gene", "mouse_gene"}.issubset(mapping.columns): raise ValueError("Frozen mapping must contain human_gene and mouse_gene")
-    if any(c not in activity.columns for c in TIME_ORDER): raise ValueError("Target gene-activity matrix lacks required D0-D14 samples")
+    if not {"module", "gene"}.issubset(modules.columns):
+        raise ValueError("Module table must contain module and gene")
+    if not {"human_gene", "mouse_gene"}.issubset(mapping.columns):
+        raise ValueError("Frozen mapping must contain human_gene and mouse_gene")
+    if any(c not in activity.columns for c in TIME_ORDER):
+        raise ValueError("Target gene-activity matrix lacks required D0-D14 samples")
 
     modules["gene_norm"] = modules.gene.map(norm)
     m6_mouse = sorted(modules.loc[pd.to_numeric(modules.module, errors="coerce") == a.module, "gene_norm"].unique())
@@ -107,12 +147,20 @@ def main() -> None:
     mouse_background = sorted(frozen.mouse_norm.unique())
     human_background = sorted(set(frozen.human_norm) & set(activity.index))
 
-    summary = {"candidate": "GSE242421", "module": a.module, "frozen_mouse_genes": len(m6_mouse),
-               "validated_human_genes": len(m6_human), "target_samples": TIME_ORDER,
-               "target_module_fitting": False, "target_gene_selection": False,
-               "core_definition": f"top {(1-a.core_quantile)*100:.0f}% by signed D0-D14 Spearman within frozen validated module genes",
-               "interpretation_only": True, "z4_decision_unchanged": "Z4_ORTHO_THRESHOLD_SENSITIVE",
-               "gprofiler": not a.skip_gprofiler, "insecure_ssl_requested": a.insecure_ssl}
+    summary = {
+        "candidate": "GSE242421",
+        "module": a.module,
+        "frozen_mouse_genes": len(m6_mouse),
+        "validated_human_genes": len(m6_human),
+        "target_samples": TIME_ORDER,
+        "target_module_fitting": False,
+        "target_gene_selection": False,
+        "core_definition": f"top {(1-a.core_quantile)*100:.0f}% by signed D0-D14 Spearman within frozen validated module genes",
+        "interpretation_only": True,
+        "z4_decision_unchanged": "Z4_ORTHO_THRESHOLD_SENSITIVE",
+        "gprofiler": not a.skip_gprofiler,
+        "insecure_ssl_requested": a.insecure_ssl,
+    }
 
     core.to_csv(out / "01_module6_target_gene_ranking.csv", index=False)
     pd.DataFrame({"mouse_gene": m6_mouse, "human_gene": [mouse_to_human.get(g, "") for g in m6_mouse]}).to_csv(out / "02_module6_frozen_orthology.csv", index=False)
@@ -120,9 +168,11 @@ def main() -> None:
 
     if not a.skip_gprofiler:
         results = {}
-        for label, genes, organism, bg in [("mouse_frozen_module", m6_mouse, "mmusculus", mouse_background),
-                                           ("human_validated_module", m6_human, "hsapiens", human_background),
-                                           ("human_target_core", core_genes, "hsapiens", human_background)]:
+        for label, genes, organism, bg in [
+            ("mouse_frozen_module", m6_mouse, "mmusculus", mouse_background),
+            ("human_validated_module", m6_human, "hsapiens", human_background),
+            ("human_target_core", core_genes, "hsapiens", human_background),
+        ]:
             if len(genes) >= 3:
                 try:
                     df = gprofiler(genes, organism, bg, ["GO:BP", "REAC"], insecure_ssl=a.insecure_ssl)
