@@ -39,6 +39,8 @@ Optional context/perturbation `u(t)` and history `h(t)` can be provided to the t
 - `run_z6_context_specificity_audit.py` — executable branch-concordance audit following Phase 0.1.
 - `run_z6_gse67462_identifier_mapping_audit.py` — diagnostic audit of GPL19972/RefSeq feature provenance and mapping to GSE67520 gene/TSS identifiers.
 - `Z6_GSE67462_IDENTIFIER_MAPPING_AUDIT_PROTOCOL.md` — protocol and interpretation rules for the identifier-provenance audit.
+- `run_z6_gse67462_mechanistic_interpretation.py` — diagnostic ranking of multimodally coherent genes and optional pathway/nuisance enrichment.
+- `Z6_GSE67462_MECHANISTIC_INTERPRETATION_PROTOCOL.md` — protocol and interpretation boundaries for mechanistic hypothesis generation.
 - `../run_z6_predictive_transition.py` — dedicated Z6 executable wrapper.
 
 ## Z6 predictive transition benchmark
@@ -107,6 +109,29 @@ python -m dynamics.run_z6_gse67462_identifier_mapping_audit `
 ```
 
 This audit is diagnostic only. It does not change frozen Z6 predictive support or any threshold. A missing platform annotation is reported as incomplete provenance, not as a biological negative result.
+
+## GSE67462 mechanistic interpretation audit
+
+The current multimodal result establishes robust within-system molecular coherence, but not causality. The mechanistic audit therefore ranks genes that are jointly coherent across H3K27ac, H3K4me3, RNAPII and OCT4, while keeping H3K27me3 as a contrasting negative-control modality.
+
+Run:
+
+```powershell
+python -m dynamics.run_z6_gse67462_mechanistic_interpretation `
+  --gtf Data\GSE67520\mm9.refGene.gtf.gz `
+  --platform-soft Data\GPL19972_family.soft.gz
+```
+
+The main output is:
+
+```text
+results\Dynamics\z6_gse67462_mechanistic_interpretation\
+  GSE67462_Z6_mechanistic_interpretation_report.md
+```
+
+The audit produces gene-level multimodal scores, candidate regulatory-lead genes, and optional pathway/nuisance enrichment. Pathway enrichment is performed only when an explicitly versioned GMT file is supplied; no external database is silently downloaded.
+
+The output is **hypothesis-generating**. In particular, an OCT4-associated or chromatin-associated trajectory does not establish causal regulation. The appropriate claim is that the GSE67462 transition contains a multimodally coherent molecular core suitable for mechanistic follow-up.
 
 ## Research constraints
 
