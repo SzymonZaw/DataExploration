@@ -1,14 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import gzip
 import hashlib
 import json
-import math
-import tempfile
 import zipfile
-from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -67,8 +62,6 @@ def read_peaks(zf: zipfile.ZipFile, member: str) -> list[str]:
 
 
 def load_mtx_from_zip(zf: zipfile.ZipFile, member: str) -> sparse.csc_matrix:
-    # scipy.io.mmread accepts a binary file-like object. Convert to CSC because
-    # columns correspond to cells and we aggregate columns by sample.
     with zf.open(member) as fh:
         matrix = mmread(fh)
     return sparse.csc_matrix(matrix, dtype=np.float64)
@@ -88,23 +81,13 @@ def choose_column(columns: list[str], aliases: list[str], required: bool = True)
     return None
 
 
-def read_peak_gene_links(
-    zf: zipfile.ZipFile,
-    member: str,
-    min_abs_correlation: float,
-) -> tuple[pd.DataFrame, dict]:
+def read_peak_gene_links(zf: zipfile.ZipFile, member: str, min_abs_correlation: float) -> tuple[pd.DataFrame, dict]:
     with zf.open(member) as fh:
         links = pd.read_csv(fh, sep="\t")
-
     columns = list(links.columns)
     peak_col = choose_column(columns, ["peak", "peak_id", "peakid", "region", "element"])
     gene_col = choose_column(columns, ["gene", "gene_symbol", "genesymbol", "target_gene", "target"])
-    corr_col = choose_column(
-        columns,
-        ["correlation", "corr", "pearson", "spearman", "r"],
-        required=False,
-    )
-
+    corr_col = choose_column(columns, ["correlation", "corr", "pearson", "spearman", "r"], required=False)
     original_n = len(links)
     if corr_col is not None:
         corr = pd.to_numeric(links[corr_col], errors="coerce")
@@ -116,12 +99,10 @@ def read_peak_gene_links(
         links = links.copy()
         links["_weight"] = 1.0
         correlation_filter = False
-
     links["_peak"] = links[peak_col].astype(str).str.strip()
     links["_gene"] = links[gene_col].astype(str).str.strip()
     links = links[(links["_peak"] != "") & (links["_gene"] != "")]
     links = links.drop_duplicates(["_peak", "_gene"])
-
     summary = {
         "link_file": member,
         "columns": columns,
@@ -148,9 +129,7 @@ def main() -> None:
     ap.add_argument("--integration-zip", type=Path, default=INTEGRATION_DEFAULT)
     ap.add_argument("--output", type=Path, default=OUT_DEFAULT)
     ap.add_argument("--min-abs-correlation", type=float, default=0.45)
-    ap.add_argument("--max-gene-activity-cpm", type=float, default=1e12)
     args = ap.parse_args()
-
     args.output.mkdir(parents=True, exist_ok=True)
     summary: dict = {
         "candidate": "GSE242421",
@@ -164,35 +143,31 @@ def main() -> None:
         "min_abs_correlation": args.min_abs_correlation,
         "derivation": "sample-level peak aggregation followed by binary peak-gene incidence multiplication; no frozen module fitting",
     }
-
     with zipfile.ZipFile(args.scatac_zip) as scatac_zf, zipfile.ZipFile(args.integration_zip) as integration_zf:
         cells_member = member_by_basename(scatac_zf, "cells.tsv")
         peaks_member = member_by_basename(scatac_zf, "peaks.bed")
         matrix_member = member_by_basename(scatac_zf, "cell_x_peak.mtx.gz")
         links_member = member_by_basename(integration_zf, "peak_gene_links_fdr1e-4.tsv")
-
         cells = read_cells(scatac_zf, cells_member)
         peaks = read_peaks(scatac_zf, peaks_member)
         matrix = load_mtx_from_zip(scatac_zf, matrix_member)
-        links, link_summary = read_peak_gene_links(
-            integration_zf, links_member, args.min_abs_correlation
-        )
-
-    summary["members"] = {
-        "cells": cells_member,
-        "peaks": peaks_member,
-        "matrix": matrix_member,
-        "links": links_member,
-    }
-    summary["matrix_shape"] = list(matrix.shape)
+        links, link_summary = read_peak_gene_links(integration_zf, links_member, args.min_abs_correlation)
+    summary["members"] = {"cells": cells_member, "peaks": peaks_member, "matrix": matrix_member, "links": links_member}
+    summary["matrix_shape_published"] = list(matrix.shape)
     summary["n_peak_ids"] = len(peaks)
     summary["n_cells"] = len(cells)
     summary["link_summary"] = link_summary
 
-    if matrix.shape[0] != len(peaks):
-        raise ValueError(f"Matrix rows {matrix.shape[0]} != peaks {len(peaks)}")
-    if matrix.shape[1] != len(cells):
-        raise ValueError(f"Matrix columns {matrix.shape[1]} != cells {len(cells)}")
+    # The Zenodo member is cell x peak. Normalize to peak x cell based on
+    # independently read cells.tsv and peaks.bed, rather than hard-coding dimensions.
+    if matrix.shape == (len(cells), len(peaks)):
+        matrix = matrix.T.tocsc()
+        summary["matrix_orientation"] = "published_cell_x_peak_transposed_to_peak_x_cell"
+    elif matrix.shape == (len(peaks), len(cells)):
+        matrix = matrix.tocsc()
+        summary["matrix_orientation"] = "published_peak_x_cell"
+    else:
+        raise ValueError(f"Matrix shape {matrix.shape} incompatible with cells={len(cells)} and peaks={len(peaks)}")
 
     cells["sample"] = cells["sample"].astype(str)
     unknown_samples = sorted(set(cells["sample"]) - set(EXPECTED_SAMPLES))
@@ -211,13 +186,11 @@ def main() -> None:
         sample_to_cols[sample] = idx
         sample_counts[sample] = int(len(idx))
 
-    # Aggregate the peak-by-cell matrix to peak-by-sample mean accessibility.
     peak_sample = np.zeros((len(peaks), len(sample_order)), dtype=np.float64)
     for j, sample in enumerate(sample_order):
         idx = sample_to_cols[sample]
         peak_sample[:, j] = np.asarray(matrix[:, idx].mean(axis=1)).ravel()
 
-    # Normalize peak accessibility to counts per million at the sample level.
     peak_sample_cpm = peak_sample / np.maximum(peak_sample.sum(axis=0, keepdims=True), 1e-12) * 1e6
     peak_df = pd.DataFrame(peak_sample_cpm, index=peaks, columns=sample_order)
     write_gzip_tsv(peak_df, args.output / "02_peak_sample_cpm.tsv.gz", index_label="peak")
@@ -226,60 +199,32 @@ def main() -> None:
     kept = links[links["_peak"].isin(peak_index)].copy()
     dropped_peak_links = int(len(links) - len(kept))
     kept["peak_idx"] = kept["_peak"].map(peak_index).astype(int)
-
     genes = sorted(kept["_gene"].unique())
     gene_index = {g: i for i, g in enumerate(genes)}
     kept["gene_idx"] = kept["_gene"].map(gene_index).astype(int)
 
     incidence = sparse.coo_matrix(
-        (
-            np.ones(len(kept), dtype=np.float64),
-            (kept["peak_idx"].to_numpy(), kept["gene_idx"].to_numpy()),
-        ),
+        (np.ones(len(kept), dtype=np.float64), (kept["peak_idx"].to_numpy(), kept["gene_idx"].to_numpy())),
         shape=(len(peaks), len(genes)),
     ).tocsr()
-
-    gene_activity = peak_sample_cpm.T @ incidence
-    gene_activity = np.asarray(gene_activity)
+    gene_activity = np.asarray(peak_sample_cpm.T @ incidence)
     gene_activity_log = np.log1p(gene_activity)
-    gene_activity_df = pd.DataFrame(
-        gene_activity_log.T,
-        index=genes,
-        columns=sample_order,
-    )
+    gene_activity_df = pd.DataFrame(gene_activity_log.T, index=genes, columns=sample_order)
     write_gzip_tsv(gene_activity_df, args.output / "01_gene_activity_log1p_cpm.tsv.gz")
 
-    coverage = gene_activity_df.notna().mean(axis=1)
     summary["sample_cell_counts"] = sample_counts
     summary["peak_gene_links_retained_in_peak_set"] = int(len(kept))
     summary["peak_gene_links_dropped_unmatched_peak"] = dropped_peak_links
     summary["genes_with_activity"] = int(len(genes))
     summary["gene_activity_shape"] = list(gene_activity_df.shape)
     summary["gene_activity_nonzero_fraction"] = float((gene_activity_df.to_numpy() > 0).mean())
-    summary["sample_library_peak_cpm"] = {
-        sample: float(peak_sample_cpm[:, j].sum())
-        for j, sample in enumerate(sample_order)
-    }
     summary["decision"] = "GENE_ACTIVITY_DERIVED"
-
-    (args.output / "03_peak_gene_mapping_summary.json").write_text(
-        json.dumps(
-            {
-                **link_summary,
-                "peak_ids_in_scATAC": len(peaks),
-                "links_retained_in_peak_set": int(len(kept)),
-                "links_dropped_unmatched_peak": dropped_peak_links,
-                "genes_with_activity": len(genes),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    (args.output / "04_derivation_summary.json").write_text(
-        json.dumps(summary, indent=2), encoding="utf-8"
-    )
+    (args.output / "03_peak_gene_mapping_summary.json").write_text(json.dumps({**link_summary, "peak_ids_in_scATAC": len(peaks), "links_retained_in_peak_set": int(len(kept)), "links_dropped_unmatched_peak": dropped_peak_links, "genes_with_activity": len(genes)}, indent=2), encoding="utf-8")
+    (args.output / "04_derivation_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     print("GSE242421 Z4 GENE-ACTIVITY DERIVATION")
+    print(f"published matrix shape: {tuple(summary['matrix_shape_published'])}")
+    print(f"matrix orientation: {summary['matrix_orientation']}")
     print(f"cells: {len(cells)}")
     print(f"peaks: {len(peaks)}")
     print(f"peak-gene links after filter: {len(links)}")
