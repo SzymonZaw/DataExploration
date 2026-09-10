@@ -23,8 +23,9 @@ The GSE297234 donor-stratified transfer audit is now complete as a diagnostic la
 The next frozen validation stage is an orthogonal chromatin-accessibility test using GSE242424/GSE242421. The prespecified protocol is:
 
 - `Z4_GSE242424_ORTHOGONAL_ENDPOINT_PROTOCOL.md`
+- `Z4_GSE242421_GENE_ACTIVITY_PROTOCOL.md`
 
-The orthogonal assay is deliberately kept separate from the frozen expression representation. No module redefinition, feature selection or threshold tuning may use the target dataset.
+The orthogonal assay is deliberately kept separate from the frozen expression representation. No module redefinition, feature selection or threshold tuning may use the target dataset. Gene activity is derived deterministically from the published peak-by-cell matrix and independent peak-gene links.
 
 ## Mechanistic falsification closure
 
