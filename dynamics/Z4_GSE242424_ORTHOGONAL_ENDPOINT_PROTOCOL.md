@@ -4,7 +4,7 @@
 
 The donor-stratified GSE297234 audit established partial transferability of frozen expression modules across two independent human donors, but it did not establish an independent biological endpoint. This protocol therefore tests a different validation layer: whether frozen expression modules from GSE67462 have reproducible counterparts in an **orthogonal chromatin-accessibility assay** from an independent human fibroblast reprogramming experiment.
 
-The target resource is GSE242424 / GSE242421, which contains scATAC-seq across D0, D2, D4, D6, D8, D10, D12, D14 and iPSC, plus a paired scRNA subseries and D1/D2 multiome samples. NCBI documents the scATAC series as fragment BED files and the scRNA series as processed count matrices. citeturn1search0turn0search3
+The target resource is GSE242424 / GSE242421, which contains scATAC-seq across D0, D2, D4, D6, D8, D10, D12, D14 and iPSC, plus a paired scRNA subseries and D1/D2 multiome samples. NCBI documents the scATAC series as fragment BED files and the scRNA series as processed count matrices.
 
 ## Frozen hypothesis
 
@@ -25,7 +25,7 @@ This is **not** a claim that chromatin accessibility is an endpoint in the clini
 
 ### Preferred
 
-Use processed gene-activity data if available. Otherwise derive gene activity from the published fragment BED files with a frozen hg38 gene annotation. NCBI reports the scATAC supplementary data as fragment BED files and identifies Chromap-based processing on hg38. citeturn1search0turn1search1
+Use processed gene-activity data if available. Otherwise derive gene activity from the published fragment BED files with a frozen hg38 gene annotation. NCBI reports the scATAC supplementary data as fragment BED files and identifies Chromap-based processing on hg38.
 
 ## Frozen analysis order
 
@@ -70,4 +70,4 @@ Used only when the frozen modules show systematic lack of concordance despite ad
 
 GSE297234 remains `Z4_UNRESOLVED` because it has no independent external endpoint in the currently audited metadata. The donor result (4/6 modules directionally concordant; 3/6 positive in both donors) is retained as **partial donor-level transferability**, not as specificity evidence.
 
-The GSE242424 experiment is attractive because it provides a different molecular layer and a dense 14-day human fibroblast reprogramming time course. It should therefore be treated as the next orthogonal validation candidate, not retroactively used to change the frozen representation. citeturn0search0turn0search3
+The GSE242424 experiment is attractive because it provides a different molecular layer and a dense 14-day human fibroblast reprogramming time course. It should therefore be treated as the next orthogonal validation candidate, not retroactively used to change the frozen representation.
