@@ -14,10 +14,13 @@ import numpy as np
 import pandas as pd
 from scipy.stats import hypergeom
 
-from dynamics.run_z6_gse67462_identifier_mapping_audit import _norm_symbol
+from dynamics import validation
+from dynamics.run_z6_gse67462_identifier_mapping_audit import _build_mapping_report, _norm_symbol, _read_soft_platform
+from dynamics.run_z6_gse67462_multimodal_validation_analysis import _load_tss
 
 DEFAULT_ASSIGNMENTS = "results/Dynamics/z6_gse67462_temporal_modules/03_gene_module_assignments.csv"
-DEFAULT_MAPPING = "results/Dynamics/z6_gse67462_identifier_mapping_audit/02_mapping_report.json"
+DEFAULT_GTF = "Data/GSE67520/mm9.refGene.gtf.gz"
+DEFAULT_SOFT = "Data/GPL19972_family.soft.gz"
 DEFAULT_OUT = "results/Dynamics/z6_gse67462_temporal_enrichment"
 DEFAULT_MIN_GENES = 20
 DEFAULT_MIN_OVERLAP = 5
@@ -80,22 +83,23 @@ def _enrich(assignments: pd.DataFrame, universe: set[str], gene_sets: dict[str, 
                 "universe_genes": len(universe),
                 "p_value": p,
             })
+    columns = ["collection", "module", "module_genes", "term", "term_genes_in_background", "overlap", "universe_genes", "p_value", "fdr_bh_global", "fdr_bh_module"]
     if not rows:
-        return pd.DataFrame(columns=["collection", "module", "module_genes", "term", "term_genes_in_background", "overlap", "universe_genes", "p_value", "fdr_bh_global", "fdr_bh_module"])
+        return pd.DataFrame(columns=columns)
     out = pd.DataFrame(rows).sort_values(["collection", "p_value", "module"]).reset_index(drop=True)
     out["fdr_bh_global"] = out.groupby("collection")["p_value"].transform(_bh)
     out["fdr_bh_module"] = out.groupby(["collection", "module"])["p_value"].transform(_bh)
-    return out
+    return out[columns]
 
 
-def _write_report(out: Path, enrichment: pd.DataFrame, assignments: pd.DataFrame, manifest: dict) -> None:
-    primary_modules = sorted(int(x) for x in assignments.loc[assignments["n_genes"] >= 20, "module"].unique())
+def _write_report(out: Path, enrichment: pd.DataFrame, module_sizes: dict[int, int], manifest: dict) -> None:
+    primary_modules = sorted(x for x, n in module_sizes.items() if n >= manifest["min_module_genes"])
     lines = [
         "# GSE67462 Z6 temporal-module enrichment",
         "",
-        f"Primary modules (>=20 genes): {', '.join('M'+str(x) for x in primary_modules)}.",
+        f"Primary modules (>= {manifest['min_module_genes']} genes): {', '.join('M'+str(x) for x in primary_modules)}.",
         "",
-        "The background is the provenance-validated GSE67462 expression universe. Enrichment is over-representation testing with a one-sided hypergeometric test and Benjamini-Hochberg FDR.",
+        f"The background is the provenance-validated GSE67462 expression universe (**{manifest['validated_universe_size']:,} genes**). Enrichment is over-representation testing with a one-sided hypergeometric test and Benjamini-Hochberg FDR.",
         "",
     ]
     if enrichment.empty:
@@ -129,8 +133,8 @@ def _write_report(out: Path, enrichment: pd.DataFrame, assignments: pd.DataFrame
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--assignments", default=DEFAULT_ASSIGNMENTS)
-    p.add_argument("--validated-universe", default=None, help="Optional text file with one validated gene symbol per line; otherwise derive from mapping report")
-    p.add_argument("--mapping-report", default=DEFAULT_MAPPING)
+    p.add_argument("--gtf", default=DEFAULT_GTF)
+    p.add_argument("--platform-soft", default=DEFAULT_SOFT)
     p.add_argument("--go", default=None, help="Versioned GO Biological Process GMT")
     p.add_argument("--reactome", default=None, help="Versioned Reactome GMT")
     p.add_argument("--kegg", default=None, help="Versioned KEGG GMT")
@@ -147,29 +151,27 @@ def main() -> None:
         raise RuntimeError("Assignments file must contain gene and module columns")
     assignments["gene"] = assignments["gene"].map(_norm_symbol)
 
-    if args.validated_universe:
-        universe = {_norm_symbol(x.strip()) for x in Path(args.validated_universe).read_text(encoding="utf-8").splitlines() if _norm_symbol(x.strip())}
-        universe_source = args.validated_universe
-    else:
-        report = json.loads(Path(args.mapping_report).read_text(encoding="utf-8"))
-        if isinstance(report, dict) and "validated_expression_symbols" in report:
-            universe = {_norm_symbol(x) for x in report["validated_expression_symbols"] if _norm_symbol(x)}
-        else:
-            raise RuntimeError("Mapping report does not contain validated_expression_symbols; supply --validated-universe")
-        universe_source = args.mapping_report
+    matrix, _metadata = validation._load_common_space()
+    tss = _load_tss(Path(args.gtf))
+    platform = _read_soft_platform(Path(args.platform_soft))
+    mapping, mapping_summary = _build_mapping_report(pd.Index(matrix.index.astype(str)), tss, platform)
+    validated = set(mapping.loc[mapping["platform_symbol_tss_match"].fillna(0).astype(int) > 0, "expression_id"].map(_norm_symbol))
+    if len(validated) < 1000:
+        raise RuntimeError(f"Validated background unexpectedly small: {len(validated)} genes")
 
-    universe &= set(assignments.gene)
-    if len(universe) < 1000:
-        raise RuntimeError(f"Validated background unexpectedly small: {len(universe)} genes")
-
-    primary = assignments.groupby("module").size()
-    assignments = assignments[assignments.module.isin(primary[primary >= args.min_module_genes].index)].copy()
+    module_sizes = {int(k): int(v) for k, v in assignments.groupby("module").size().items()}
+    primary = [m for m, n in module_sizes.items() if n >= args.min_module_genes]
+    assignments = assignments[assignments.module.isin(primary)].copy()
 
     sources = {"GO_BP": args.go, "REACTOME": args.reactome, "KEGG": args.kegg, "NUISANCE": args.nuisance}
     results = []
     manifest = {
-        "validated_universe_size": len(universe),
-        "universe_source": universe_source,
+        "validated_universe_size": len(validated),
+        "validated_expression_platform_symbol_to_tss_matches": mapping_summary.get("expression_platform_symbol_to_tss_matches"),
+        "gtf": {"path": str(Path(args.gtf)), "sha256": _sha256(Path(args.gtf))},
+        "platform_soft": {"path": str(Path(args.platform_soft)), "sha256": _sha256(Path(args.platform_soft))},
+        "module_sizes": module_sizes,
+        "primary_modules": sorted(primary),
         "min_module_genes": args.min_module_genes,
         "min_overlap": args.min_overlap,
         "fdr_method": "Benjamini-Hochberg",
@@ -185,22 +187,21 @@ def main() -> None:
             raise FileNotFoundError(path)
         sets = _read_gmt(path)
         manifest["collections"][collection] = {"path": str(path), "sha256": _sha256(path), "terms": len(sets)}
-        results.append(_enrich(assignments, universe, sets, collection, args.min_overlap))
+        results.append(_enrich(assignments, validated, sets, collection, args.min_overlap))
 
     enrichment = pd.concat(results, ignore_index=True) if results else pd.DataFrame()
     if not enrichment.empty:
         enrichment.to_csv(out / "01_enrichment_all.csv", index=False)
-        top = enrichment.sort_values(["collection", "fdr_bh_global", "p_value"])
-        top.to_csv(out / "02_enrichment_ranked.csv", index=False)
+        enrichment.sort_values(["collection", "fdr_bh_global", "p_value"]).to_csv(out / "02_enrichment_ranked.csv", index=False)
     else:
         pd.DataFrame(columns=["collection", "module", "term", "overlap", "p_value", "fdr_bh_global", "fdr_bh_module"]).to_csv(out / "01_enrichment_all.csv", index=False)
         pd.DataFrame().to_csv(out / "02_enrichment_ranked.csv", index=False)
     (out / "03_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    _write_report(out, enrichment, assignments, manifest)
+    _write_report(out, enrichment, module_sizes, manifest)
 
     print("GSE67462 TEMPORAL MODULE ENRICHMENT AUDIT")
-    print(f"validated background genes: {len(universe)}")
-    print(f"primary modules: {sorted(primary[primary >= args.min_module_genes].index.astype(int).tolist())}")
+    print(f"validated background genes: {len(validated)}")
+    print(f"primary modules: {sorted(primary)}")
     print(f"collections analyzed: {[x for x in sources if sources[x]]}")
     print(f"significant global-FDR terms: {int((enrichment.fdr_bh_global < 0.05).sum()) if not enrichment.empty else 0}")
     print(f"Outputs: {out}")
