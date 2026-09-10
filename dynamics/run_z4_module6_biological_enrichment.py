@@ -27,11 +27,12 @@ def flatten_values(x):
     return [str(x)]
 
 def gprofiler(genes, organism, background, sources, insecure_ssl=False):
-    payload={"organism":organism,"query":[str(g) for g in genes],"sources":sources,"user_threshold":0.05,"no_evidences":False,"combined":False}
+    query_genes=[str(g) for g in genes]
+    payload={"organism":organism,"query":query_genes,"sources":sources,"user_threshold":0.05,"no_evidences":False,"combined":False}
     if background:
         payload["background"]=[str(g) for g in background]; payload["domain_scope"]="custom"
     data=json.dumps(payload).encode("utf-8")
-    req=urllib.request.Request("https://biit.cs.ut.ee/gprofiler/api/gost/profile/",data=data,headers={"Content-Type":"application/json","Accept":"application/json","User-Agent":"DataExploration-Z4-Module6/1.5"},method="POST")
+    req=urllib.request.Request("https://biit.cs.ut.ee/gprofiler/api/gost/profile/",data=data,headers={"Content-Type":"application/json","Accept":"application/json","User-Agent":"DataExploration-Z4-Module6/1.6"},method="POST")
     ctx=ssl._create_unverified_context() if insecure_ssl else None
     try:
         with urllib.request.urlopen(req,timeout=60,context=ctx) as r: obj=json.loads(r.read().decode("utf-8"))
@@ -39,9 +40,17 @@ def gprofiler(genes, organism, background, sources, insecure_ssl=False):
         body=e.read().decode("utf-8",errors="replace"); raise RuntimeError(f"g:Profiler HTTP {e.code}: {body}") from e
     rows=[]
     for r in (obj.get("result") or []):
-        # g:Profiler's `intersection` is the actual query-gene intersection.
-        # Keep evidence annotations out of this field.
-        genes_hit=flatten_values(r.get("intersection"))
+        # Current g:Profiler JSON exposes `intersections` as a list-of-lists,
+        # aligned to the submitted query genes. Non-empty entries identify the
+        # query genes belonging to the term; the nested values are evidence
+        # codes, not gene identifiers.
+        intersections=r.get("intersections") or []
+        if len(intersections)==len(query_genes):
+            genes_hit=[query_genes[i] for i,item in enumerate(intersections) if item not in (None, [], "")]
+        else:
+            # Conservative fallback for unexpected API shape: do not invent
+            # gene identities from nested evidence values.
+            genes_hit=[]
         rows.append({"source":r.get("source"),"native":r.get("native"),"name":r.get("name"),"p_value":r.get("p_value"),"significant":r.get("significant"),"intersection_size":r.get("intersection_size"),"term_size":r.get("term_size"),"effective_domain_size":r.get("effective_domain_size"),"intersection":";".join(genes_hit)})
     return pd.DataFrame(rows)
 
