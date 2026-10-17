@@ -6,7 +6,7 @@ base = Path("results/Dynamics/z6_gse67462_mechanistic_interpretation")
 
 # Kolejność kolumn odpowiada kolejności zapisu macierzy.
 layout = [
-    ("FLAG_control", 8),
+    ("FLAG_tagged_exogenous_OCT4", 8),
     ("H3K27ac", 9),
     ("H3K27me3", 9),
     ("H3K4me1", 9),
@@ -81,3 +81,4 @@ def flatten_columns(df):
 flatten_columns(presence).to_csv(base / "08_presence_clean.csv")
 flatten_columns(counts).to_csv(base / "09_counts_clean.csv")
 print("\nZapisano 08_presence_clean.csv i 09_counts_clean.csv")
+
