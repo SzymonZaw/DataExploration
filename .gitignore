@@ -1,0 +1,14 @@
+﻿.venv/
+__pycache__/
+*.pyc
+.env
+
+# Duże dane źródłowe
+Data/
+data/
+
+# Duże wyniki analizy
+results/
+
+# Kopie zapasowe skryptów
+*.bak

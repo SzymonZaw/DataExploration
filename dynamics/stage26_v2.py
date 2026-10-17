@@ -174,6 +174,7 @@ def platform_mapping(gpl):
         return cached
     print(f"    {gpl}: downloading NCBI GEO platform annotation...", flush=True)
     text = _request(f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={gpl}&targ=self&view=full&form=text", timeout=120)
+    text = text.replace("\r\n", "\n")
     m = re.search(r"!platform_table_begin\n(.*?)\n!platform_table_end", text, re.S)
     if not m: raise RuntimeError(f"No platform table for {gpl}")
     tab = pd.read_csv(StringIO(m.group(1)), sep="\t", dtype=str)
