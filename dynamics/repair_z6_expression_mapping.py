@@ -10,9 +10,16 @@ GTF = Path("Data/GSE67520/mm9.refGene.gtf.gz")
 OUT = Path("results/Dynamics/z6_gse67462_mechanistic_interpretation")
 OUT.mkdir(parents=True, exist_ok=True)
 
+
 def clean_id(x):
-    x = str(x).strip().strip('"').strip("'").strip()
+    x = str(x).strip()
+    while len(x) >= 2 and (
+        (x[0] == '"' and x[-1] == '"')
+        or (x[0] == "'" and x[-1] == "'")
+    ):
+        x = x[1:-1].strip()
     return x
+
 
 def accession_key(x):
     x = clean_id(x)
