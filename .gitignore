@@ -12,3 +12,8 @@ results/
 
 # Kopie zapasowe skryptów
 *.bak
+
+# Rozpakowane zbiory danych
+GSE28688_extracted/
+GSE52052_extracted/
+GSE67520_extracted/
